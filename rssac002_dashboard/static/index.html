@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RSSAC002 Analysis Dashboard</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/js/theme.js"></script>
+<script type="module" src="/static/js/main.js"></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="#/overview">RSSAC002 Analysis Dashboard</a>
+    <nav aria-label="Pages">
+      <a href="#/overview" data-route="overview">Overview</a>
+      <a href="#/compare" data-route="compare">Compare</a>
+      <a href="#/reports" data-route="reports">Report files</a>
+      <a href="#/quality" data-route="quality">Data quality</a>
+      <a href="#/sources" data-route="sources">Sources</a>
+      <a href="#/methods" data-route="methods">Methods</a>
+    </nav>
+    <button class="button quiet" id="theme" type="button">Dark theme</button>
+  </div>
+</header>
+<div class="filters" id="filters" hidden></div>
+<main id="main" tabindex="-1"><div class="wrap"><p class="muted">Loading reports…</p></div></main>
+<noscript><div class="wrap"><p>This dashboard draws its charts in the browser and needs JavaScript.</p></div></noscript>
+</body>
+</html>

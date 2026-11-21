@@ -1,0 +1,26 @@
+# One container. Reports and settings live in the "dashboard-data" volume.
+# Copy .env.example to .env to set an admin password; without one the dashboard is read-only
+# on the web and sources are added with `docker compose exec dashboard rssac002-dashboard add ...`.
+
+services:
+  dashboard:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "${DASHBOARD_PORT:-8000}:8000"
+    environment:
+      RSSAC002_ADMIN_PASSWORD_HASH: ${RSSAC002_ADMIN_PASSWORD_HASH:-}
+      RSSAC002_SESSION_SECRET: ${RSSAC002_SESSION_SECRET:-}
+      RSSAC002_SCAN_INTERVAL_HOURS: ${RSSAC002_SCAN_INTERVAL_HOURS:-6}
+      RSSAC002_COOKIE_SECURE: ${RSSAC002_COOKIE_SECURE:-false}
+      RSSAC002_RATE_LIMIT: ${RSSAC002_RATE_LIMIT:-240}
+      RSSAC002_TRUST_PROXY: ${RSSAC002_TRUST_PROXY:-false}
+      RSSAC002_MAX_ARCHIVE_REPORTS: ${RSSAC002_MAX_ARCHIVE_REPORTS:-6000}
+    volumes:
+      - dashboard-data:/data
+      # To read reports from a folder on this machine (for example the metrics generator's
+      # export_root), mount it read-only and add "/reports/nl" as a source:
+      # - /path/to/NL-RSSAC002-data:/reports/nl:ro
+
+volumes:
+  dashboard-data:

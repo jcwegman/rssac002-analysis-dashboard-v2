@@ -1,0 +1,21 @@
+# Installed as /etc/caddy/sites/rssac002.caddy by `sh deploy/deploy.sh config`.
+# The server's /etc/caddy/Caddyfile loads every file in that folder.
+#
+# Set RSSAC002_DOMAIN when deploying to use another host name. Caddy gets and renews the
+# certificate on its own once DNS for the name points at the server.
+# There is no access log, so request paths are never written to disk.
+
+{$RSSAC002_DOMAIN:rssac002.jorrit.io} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+
+	reverse_proxy 127.0.0.1:8000 {
+		# Replace whatever the client sent: the app's request budget per visitor relies on this
+		# header (RSSAC002_TRUST_PROXY=true).
+		header_up X-Forwarded-For {remote_host}
+	}
+}

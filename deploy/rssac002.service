@@ -1,0 +1,41 @@
+# /etc/systemd/system/rssac002.service, installed by deploy/deploy.sh.
+[Unit]
+Description=RSSAC002 Analysis Dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=rssac002
+Group=rssac002
+EnvironmentFile=/etc/rssac002/env
+# Git, which fetches the report repositories, wants a home directory it can read.
+Environment=HOME=/var/lib/rssac002
+WorkingDirectory=/var/lib/rssac002
+ExecStart=/opt/rssac002/venv/bin/rssac002-dashboard serve --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=2
+# The server is small; an import that runs away is stopped before it takes the machine down.
+MemoryHigh=500M
+MemoryMax=700M
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+ReadWritePaths=/var/lib/rssac002
+
+[Install]
+WantedBy=multi-user.target
