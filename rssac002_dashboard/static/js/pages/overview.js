@@ -59,6 +59,16 @@ function figures(data, days) {
   );
 }
 
+/**
+ * The name of the line that sums all other codes. A service can report hundreds of them, as one
+ * root server does, so only the first few are named. The CSV download has a column per code.
+ */
+function otherCodesLabel(codes) {
+  const named = 6;
+  const list = codes.length > named + 1 ? `${codes.slice(0, named).join(", ")} and ${codes.length - named} more` : codes.join(", ");
+  return `Other codes (${list})`;
+}
+
 /** One line per named response code that occurs, plus the sum of all other codes. */
 function rcodeSeries(rcodes, prepare) {
   const named = new Set(NAMED_RCODES.map(([code]) => code));
@@ -67,7 +77,7 @@ function rcodeSeries(rcodes, prepare) {
   if (others.length) {
     const length = rcodes[others[0]].length;
     const sum = Array.from({ length }, (_, day) => (rcodes[others[0]][day] === null ? null : others.reduce((total, code) => total + rcodes[code][day], 0)));
-    series.push({ label: `Other codes (${others.join(", ")})`, color: 0, values: prepare(sum) });
+    series.push({ label: otherCodesLabel(others), color: 0, values: prepare(sum) });
   }
   return series;
 }
