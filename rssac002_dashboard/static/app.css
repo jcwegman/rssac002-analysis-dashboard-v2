@@ -146,6 +146,8 @@ code, .mono { font-family: var(--mono); font-size: 0.93em; }
 
 main { padding: 28px 0 72px; transition: opacity 0.12s; }
 main.loading { opacity: 0.5; }
+.foot { border-top: 1px solid var(--line); color: var(--ink-2); font-size: 13px; }
+.foot .wrap { display: flex; flex-wrap: wrap; gap: 6px 24px; padding-top: 16px; padding-bottom: 24px; }
 @media (prefers-reduced-motion: reduce) { main { transition: none; } }
 
 /* --- controls --------------------------------------------------------------------- */

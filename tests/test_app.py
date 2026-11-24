@@ -176,6 +176,9 @@ def test_without_a_password_there_is_no_admin(tmp_path):
 def test_interface_and_security_headers(client):
     page = client.get("/")
     assert "RSSAC002 Analysis Dashboard" in page.text
+    # Visitors can see who made it, find the source and open an issue.
+    assert "Jorrit Wegman, TU Delft" in page.text
+    assert 'href="https://github.com/jcwegman/rssac002-analysis-dashboard-v2/issues"' in page.text
     assert "default-src 'self'" in page.headers["content-security-policy"]
     script = client.get("/static/js/main.js")
     assert script.status_code == 200 and script.headers["cache-control"] == "no-cache"
