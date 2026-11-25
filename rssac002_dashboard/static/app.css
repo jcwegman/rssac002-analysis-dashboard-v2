@@ -317,6 +317,8 @@ pre.yaml { margin: 0; padding: 12px 14px; background: var(--page); border-radius
 .status.failed::before { background: var(--critical); }
 .status.running::before, .status.queued::before { background: var(--series-4); }
 .actions { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+.actions.start { justify-content: flex-start; margin-left: -6px; }
+.file-name { margin: 0 0 6px; color: var(--ink-2); font-size: 12.5px; }
 .stack { display: grid; gap: 16px; }
 details.history { margin: 4px 0 10px; }
 details.history summary { cursor: pointer; color: var(--accent); }

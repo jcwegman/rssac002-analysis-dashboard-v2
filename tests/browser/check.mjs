@@ -140,9 +140,10 @@ await click("A year earlier");
 check("a period compares with 52 weeks earlier", !!(await until(`[...document.querySelectorAll(".legend span")].some((one) => one.textContent === "52 weeks earlier")`)));
 
 // --- reports, quality, methods ------------------------------------------------------------
-await goto("#/reports?range=7d", `document.querySelectorAll("table.data tbody tr").length >= 20`);
+await goto("#/reports?range=7d", `document.querySelectorAll("table.data tbody tr").length >= 5`);
+check("report files are listed one day per row, with a file per metric", (await js(`document.querySelectorAll("table.data thead th").length`)) === 5 && (await js(`[...document.querySelectorAll("table.data tbody tr")].every((row) => row.querySelectorAll("a.button").length === 4)`)));
 await click("Read");
-check("a report file can be read in place", !!(await until(`document.querySelector("pre.yaml")?.textContent.includes("version: rssac002v5")`)));
+check("a report file can be read in place", !!(await until(`document.querySelector("pre.yaml")?.textContent.includes("version: rssac002v5") && document.querySelector(".file-name")?.textContent.includes("traffic-volume.yaml")`)));
 await goto("#/quality?range=all", `document.querySelectorAll(".figures.three .figure").length === 3`);
 const quality = await js(`document.querySelector("main").textContent`);
 check("data quality reports gaps and checks", quality.includes("Nameserver query counts add up") && quality.includes("Missing days") && /Holds on all \d+ days/.test(quality));
