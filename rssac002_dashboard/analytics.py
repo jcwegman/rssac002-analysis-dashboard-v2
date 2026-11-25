@@ -48,7 +48,8 @@ MEASURES = {
     "answer_ratio": ("Responses per query", "ratio"),
     "ipv6_share": ("IPv6 share of queries", "share"),
     "tcp_share": ("TCP share of queries", "share"),
-    "encrypted_share": ("TLS and QUIC share of queries", "share"),
+    "tls_share": ("TLS share of queries", "share"),
+    "quic_share": ("QUIC share of queries", "share"),
     "noerror_share": ("NOERROR share", "share"),
     "nxdomain_share": ("NXDOMAIN share", "share"),
     "servfail_share": ("SERVFAIL share", "share"),
@@ -98,13 +99,10 @@ def _traffic(report: dict) -> dict:
         return sum(count or 0 for key, count in q.items() if set(key) & set(wanted))
 
     queries, responses = queries_over(*TRANSPORTS), sum(count or 0 for count in r.values())
-    udp_tcp = queries_over("udp", "tcp")
-    reports_extra = any(q[p, i] is not None for p in EXTRA_TRANSPORTS for i in IP_VERSIONS)
-    encrypted = queries_over(*EXTRA_TRANSPORTS) if reports_extra else None
+    reported = {p: any(q[p, i] is not None for i in IP_VERSIONS) for p in EXTRA_TRANSPORTS}
     return {
         "queries": queries,
-        "queries_udp_tcp": udp_tcp,
-        "queries_encrypted": encrypted,
+        "queries_udp_tcp": queries_over("udp", "tcp"),
         "responses": responses,
         "queries_udp": queries_over("udp"),
         "queries_tcp": queries_over("tcp"),
@@ -112,9 +110,9 @@ def _traffic(report: dict) -> dict:
         "queries_ipv6": queries_over("ipv6"),
         "answer_ratio": _div(responses, queries),
         "ipv6_share": _div(queries_over("ipv6"), queries),
-        # Of UDP and TCP only: the share is read as a sign of truncated UDP responses.
-        "tcp_share": _div(queries_over("tcp"), udp_tcp),
-        "encrypted_share": _div(encrypted, queries) if reports_extra else None,
+        # Every transport's share is of all queries, so the shares can be drawn in one chart.
+        "tcp_share": _div(queries_over("tcp"), queries),
+        **{f"{p}_share": _div(queries_over(p), queries) if reported[p] else None for p in EXTRA_TRANSPORTS},
         **{f"q_{proto}_{ip}": count for (proto, ip), count in q.items()},
         **{f"r_{proto}_{ip}": count for (proto, ip), count in r.items()},
     }
@@ -181,7 +179,7 @@ def _summarise(columns: dict[str, list], window: slice, minimum_days: int = 1) -
     return {
         "queries": _mean(col("queries")) if covered("queries") else None,
         "ipv6_share": _ratio_of_sums(col("queries_ipv6"), col("queries")) if covered("queries") else None,
-        "tcp_share": _ratio_of_sums(col("queries_tcp"), col("queries_udp_tcp")) if covered("queries") else None,
+        "tcp_share": _ratio_of_sums(col("queries_tcp"), col("queries")) if covered("queries") else None,
         "nxdomain_share": _ratio_of_sums(col("nxdomain"), col("rcode_total")) if covered("rcode_total") else None,
         "sources": _mean(col("sources")) if covered("sources") else None,
     }
@@ -228,7 +226,7 @@ def build_series(
     if derived_only:
         return result
 
-    extra = ("queries_udp", "queries_tcp", "queries_encrypted", "queries_ipv4", "queries_ipv6", *BREAKDOWN)
+    extra = ("queries_udp", "queries_tcp", "queries_ipv4", "queries_ipv6", *BREAKDOWN)
     percentiles = [
         f"{p}_{side}_{q}" for p in ("udp", "tcp") for side in ("request", "response") for q in ("p50", "p95")
     ]

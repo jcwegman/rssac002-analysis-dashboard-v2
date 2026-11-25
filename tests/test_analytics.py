@@ -161,14 +161,14 @@ def test_tls_and_quic_count_in_the_totals_and_have_series_of_their_own(store, so
     assert derived["queries_udp_tcp"] == [1000, 1000]
     assert derived["responses"] == [985, 1235]
     assert derived["ipv6_share"][1] == pytest.approx(330 / 1250)
-    assert derived["tcp_share"] == [pytest.approx(0.10), pytest.approx(0.10)]  # of UDP and TCP only
-    assert derived["encrypted_share"] == [None, pytest.approx(0.2)]  # not reported is a gap, not 0%
-    assert series["queries_encrypted"] == [None, 250]
+    assert derived["tcp_share"] == [pytest.approx(0.10), pytest.approx(0.08)]  # of all queries
+    assert derived["tls_share"] == [None, pytest.approx(0.192)]  # not reported is a gap, not 0%
+    assert derived["quic_share"] == [None, pytest.approx(0.008)]
     assert series["q_tls_ipv6"] == [None, 90] and series["r_quic_ipv4"] == [None, 10]
     assert series["q_quic_ipv6"] == [None, None]  # the operator left this one field out
-    assert data["summary"]["current"]["tcp_share"] == pytest.approx(0.10)
+    assert data["summary"]["current"]["tcp_share"] == pytest.approx(200 / 2250)
     header = series_csv(data).splitlines()[0].split(",")
-    assert {"queries_udp_tcp", "encrypted_share", "q_tls_ipv4", "r_quic_ipv6"} <= set(header)
+    assert {"queries_udp_tcp", "tls_share", "quic_share", "q_tls_ipv4", "r_quic_ipv6"} <= set(header)
 
 
 def test_tls_size_histograms_are_in_the_matrix_only_when_reported(store, source, tree):
