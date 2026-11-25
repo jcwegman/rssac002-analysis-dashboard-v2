@@ -4,11 +4,13 @@ import { formatDay, h } from "../format.js";
 import { countryName } from "../ui.js";
 
 const MEASURES = [
-  ["Queries received", "Sum of the four counters dns-{udp,tcp}-queries-received-{ipv4,ipv6}.", "traffic-volume"],
-  ["Responses sent", "Sum of the four counters dns-{udp,tcp}-responses-sent-{ipv4,ipv6}.", "traffic-volume"],
+  ["Queries received", "Sum of the four counters dns-{udp,tcp}-queries-received-{ipv4,ipv6}, plus the queries over TLS and QUIC where the operator reports them (see below).", "traffic-volume"],
+  ["UDP and TCP queries", "Sum of the four counters dns-{udp,tcp}-queries-received-{ipv4,ipv6} only: the queries RSSAC002 defines, for comparing services whether or not they report TLS and QUIC.", "traffic-volume"],
+  ["Responses sent", "Sum of the four counters dns-{udp,tcp}-responses-sent-{ipv4,ipv6}, plus the responses over TLS and QUIC where the operator reports them.", "traffic-volume"],
   ["Responses per query", "Responses sent divided by queries received.", "traffic-volume"],
-  ["IPv6 share of queries", "Queries received over IPv6 (UDP and TCP) divided by queries received.", "traffic-volume"],
-  ["TCP share of queries", "Queries received over TCP (IPv4 and IPv6) divided by queries received.", "traffic-volume"],
+  ["IPv6 share of queries", "Queries received over IPv6 (all transports) divided by queries received.", "traffic-volume"],
+  ["TCP share of queries", "Queries received over TCP (IPv4 and IPv6) divided by the queries received over UDP and TCP. TLS and QUIC are left out, because the share is read as a sign of truncated UDP responses.", "traffic-volume"],
+  ["TLS and QUIC share of queries", "Queries received over TLS and QUIC divided by queries received. Only given for a service that reports these transports.", "traffic-volume"],
   ["Response code shares", "The count for a code divided by the sum of all counts in the report, including code −1. NOERROR is 0, NXDOMAIN 3, SERVFAIL 2, REFUSED 5.", "rcode-volume"],
   ["Unanswered share", "The count for code −1 divided by the sum of all counts. Code −1 is not a DNS response code: the ENTRADA-based generator uses it for queries without a matched response.", "rcode-volume"],
   ["Unique IPv4 and IPv6 sources", "num-sources-ipv4 and num-sources-ipv6: distinct source addresses seen during the day.", "unique-sources"],
@@ -26,12 +28,16 @@ const NOTES = [
   ["Change against the period before", "The headline figures compare the chosen period with the period of equal length immediately before it. The comparison is left out when that earlier period has reports for fewer than 90% of its days; a full year set against part of an earlier year would not be a real change."],
   ["Logarithmic axes", "Used where series differ by orders of magnitude. Zero has no position on such an axis, so a day with a count of zero appears as a gap in that line; the readout and the table still give 0."],
   ["7-day trailing mean", "With this option each point is the mean of that day and the six days before it, which removes the weekly rhythm. A day without a report stays a gap, and a mean is shown only when at least four of the seven days have values. Tables under smoothed charts show the smoothed values; the summary statistics and the CSV download always use the daily values."],
-  ["Size heatmaps", "Colour encodes the number of messages in a 16-byte size step on a day, on a logarithmic scale shared by the four panels. Blank cells are zero; grey columns are days without a report."],
+  ["Size heatmaps", "Colour encodes the number of messages in a 16-byte size step on a day, on a logarithmic scale shared by the panels. Blank cells are zero; grey columns are days without a report."],
   ["Share-based heatmaps", "With \u201cShare of the day\u201d each cell is its count divided by that day\u2019s total for the panel, so the colour shows the size mix independently of traffic growth."],
   ["A year earlier", "The comparison uses the same period shifted back 364 days (52 weeks), so that weekdays line up."],
   ["Events", "Markers above a chart are events recorded by the dashboard\u2019s administrator, such as a capture outage. They are annotations, not derived from the data."],
   ["Consistency checks", "The Data quality page compares numbers that the metrics count in two ways, for example nameserver totals against the combined report. A difference above the stated tolerance is listed with the days concerned."],
-  ["Totals of several services", "A service such as root-servers.net is computed by the dashboard: for each day, the reports of all its members are added up. A day is given only when every member has a report for that metric; otherwise it is a gap, because a sum over fewer members is not the total. Unique sources are never added up, since an address that queries several members would be counted more than once, so such a service has none."],
+  [
+    "DNS over TLS and QUIC",
+    "RSSAC002 counts DNS over UDP and TCP only. Operators that also serve DNS over TLS or QUIC report it in fields of their own, named like the standard ones with a prefix in front, such as b-dns-tls-queries-received-ipv4. Among the root servers, b has done so since January 2024 and h since August 2026; h also gives the sizes of these messages. The dashboard reads these fields and counts them in queries received and responses sent, because the same operators’ response-code counts already include this traffic. Their lines appear in the transport charts of a service that reports them. A report without these fields adds nothing for them and shows them as not reported, not as zero. The names are the operators’: h called the fields dot and doq in its first week, which are read as TLS and QUIC, and b named its TLS responses “queries-sent” until May 2024. These counts have been part of queries per day since November 2026; before that, the dashboard left them out. “UDP and TCP queries” on the Compare page gives the figure without them.",
+  ],
+  ["Totals of several services", "A service such as root-servers.net is computed by the dashboard: for each day, the reports of all its members are added up. A day is given only when every member has a report for that metric; otherwise it is a gap, because a sum over fewer members is not the total. Unique sources are never added up, since an address that queries several members would be counted more than once, so such a service has none. TLS and QUIC counts are added up over the members that report them, and the total’s file names those members. Sizes of TLS and QUIC messages are given for the total only on days on which every member that counts such traffic also gives its sizes."],
   ["Summary statistics", "Computed over the daily values in the period. The standard deviation is the sample standard deviation (n − 1); CV is the standard deviation divided by the mean."],
   ["Validation", "Reports are checked on import. A report with a wrong type, a negative count or a malformed size step is rejected and listed in the source’s import history. A value explicitly set to null is treated as not reported."],
 ];

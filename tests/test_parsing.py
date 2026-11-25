@@ -116,3 +116,61 @@ def test_metric_must_match_the_file_name():
 def test_things_that_are_not_one_report(text):
     with pytest.raises(ReportError):
         parse_report(text)
+
+
+def test_tls_and_quic_fields_of_an_operator_are_read_under_one_name():
+    """B and H root report these transports in prefixed fields; H called them dot and doq at first."""
+    b = parse_report(report_text("traffic-volume", DAY, **{"b-dns-tls-queries-received-ipv4": 30}))
+    assert b.data["dns-tls-queries-received-ipv4"] == 30 and b.warnings == []
+    assert "dns-tls-queries-received-ipv6" not in b.data  # not reported is not the same as zero
+    early = {"h-dns-dot-queries-received-ipv6": 7, "h-dns-doq-responses-sent-ipv4": 2}
+    late = {"h-dns-tls-queries-received-ipv6": 7, "h-dns-quic-responses-sent-ipv4": 2}
+    assert parse_report(report_text("traffic-volume", DAY, **early)).data == (
+        parse_report(report_text("traffic-volume", DAY, **late)).data
+    )
+    assert parse_report(report_text("traffic-volume", DAY, **late)).data["dns-quic-responses-sent-ipv4"] == 2
+    assert "dns-tls-queries-received-ipv4" not in parse_report(report_text("traffic-volume", DAY)).data
+
+
+def test_tls_responses_named_queries_sent_are_read_as_responses_with_a_note():
+    report = parse_report(report_text("traffic-volume", DAY, **{"b-dns-tls-queries-sent-ipv4": 29}))
+    assert report.data["dns-tls-responses-sent-ipv4"] == 29
+    assert report.warnings == ["b-dns-tls-queries-sent-ipv4 is read as responses sent"]
+
+
+def test_tls_and_quic_size_histograms_are_read():
+    sizes = {"h-tls-request-sizes": {"32-47": 4, "288-": 1}, "h-doq-response-sizes": {"848-863": 2}}
+    report = parse_report(report_text("traffic-sizes", DAY, **sizes))
+    assert report.data["tls-request-sizes"] == [[32, 4], [288, 1]]
+    assert report.data["quic-response-sizes"] == [[848, 2]]
+    assert "tls-response-sizes" not in report.data and report.warnings == []
+
+
+@pytest.mark.parametrize(
+    ("metric", "field"),
+    [
+        ("traffic-volume", "b-dns-sctp-queries-received-ipv4"),  # a transport the dashboard does not know
+        ("traffic-volume", "dns-tls-queries-received-ipv4"),  # no prefix: not how operators name their own fields
+        ("traffic-volume", "b-dns-tls-queries-received-ipv5"),
+        ("traffic-sizes", "h-sctp-request-sizes"),
+    ],
+)
+def test_other_unknown_fields_are_still_ignored_with_a_warning(metric, field):
+    report = parse_report(report_text(metric, DAY, **{field: 1 if metric == "traffic-volume" else {"32-47": 1}}))
+    assert report.warnings == [f"ignored unknown field {field!r}"]
+    assert set(report.data) == set(parse_report(report_text(metric, DAY)).data)
+
+
+@pytest.mark.parametrize(
+    ("metric", "overrides", "message"),
+    [
+        ("traffic-volume", {"h-dns-tls-queries-received-ipv4": -1}, "must not be negative"),
+        ("traffic-volume", {"h-dns-tls-queries-received-ipv4": 1, "h-dns-dot-queries-received-ipv4": 1}, "both give"),
+        ("traffic-volume", {"b-dns-tls-responses-sent-ipv4": 1, "b-dns-tls-queries-sent-ipv4": 1}, "both give"),
+        ("traffic-sizes", {"h-tls-request-sizes": {"30-45": 1}}, "16-byte boundary"),
+        ("traffic-sizes", {"h-tls-request-sizes": {"32-47": 1}, "h-dot-request-sizes": {"32-47": 1}}, "both give"),
+    ],
+)
+def test_wrong_tls_and_quic_values_are_rejected(metric, overrides, message):
+    with pytest.raises(ReportError, match=message):
+        parse_report(report_text(metric, DAY, **overrides))

@@ -9,7 +9,7 @@ from __future__ import annotations
 import datetime as dt
 import math
 
-from .parsing import BUCKET_WIDTH, SIZE_HISTOGRAMS
+from .parsing import BUCKET_WIDTH, EXTRA_SIZE_HISTOGRAMS, EXTRA_TRANSPORTS, SIZE_HISTOGRAMS
 from .store import Store
 
 SIZE_METRICS = ("traffic-volume", "rcode-volume", "unique-sources", "traffic-sizes")
@@ -43,10 +43,12 @@ NAMED_RCODE_SHARES = {"noerror": "0", "nxdomain": "3", "servfail": "2", "refused
 # Measures that can be compared between services: key -> (label, unit).
 MEASURES = {
     "queries": ("Queries per day", "count"),
+    "queries_udp_tcp": ("UDP and TCP queries per day", "count"),
     "responses": ("Responses per day", "count"),
     "answer_ratio": ("Responses per query", "ratio"),
     "ipv6_share": ("IPv6 share of queries", "share"),
     "tcp_share": ("TCP share of queries", "share"),
+    "encrypted_share": ("TLS and QUIC share of queries", "share"),
     "noerror_share": ("NOERROR share", "share"),
     "nxdomain_share": ("NXDOMAIN share", "share"),
     "servfail_share": ("SERVFAIL share", "share"),
@@ -79,23 +81,40 @@ def percentile(histogram: list[list[int]], fraction: float, open_lower: int) -> 
     return None
 
 
-def _traffic(report: dict) -> dict:
-    def f(proto, side, ip):
-        return report[f"dns-{proto}-{side}-{ip}"]
+IP_VERSIONS = ("ipv4", "ipv6")
+TRANSPORTS = ("udp", "tcp", *EXTRA_TRANSPORTS)
 
-    q = {(p, i): f(p, "queries-received", i) for p in ("udp", "tcp") for i in ("ipv4", "ipv6")}
-    r = {(p, i): f(p, "responses-sent", i) for p in ("udp", "tcp") for i in ("ipv4", "ipv6")}
-    queries, responses = sum(q.values()), sum(r.values())
+
+def _traffic(report: dict) -> dict:
+    """Queries and responses over every transport the report has.
+
+    TLS and QUIC are operators' own fields, see parsing.py. A report without them adds nothing
+    to the totals, and its TLS and QUIC values are None ("not reported"), not zero.
+    """
+    q = {(p, i): report.get(f"dns-{p}-queries-received-{i}") for p in TRANSPORTS for i in IP_VERSIONS}
+    r = {(p, i): report.get(f"dns-{p}-responses-sent-{i}") for p in TRANSPORTS for i in IP_VERSIONS}
+
+    def queries_over(*wanted):
+        return sum(count or 0 for key, count in q.items() if set(key) & set(wanted))
+
+    queries, responses = queries_over(*TRANSPORTS), sum(count or 0 for count in r.values())
+    udp_tcp = queries_over("udp", "tcp")
+    reports_extra = any(q[p, i] is not None for p in EXTRA_TRANSPORTS for i in IP_VERSIONS)
+    encrypted = queries_over(*EXTRA_TRANSPORTS) if reports_extra else None
     return {
         "queries": queries,
+        "queries_udp_tcp": udp_tcp,
+        "queries_encrypted": encrypted,
         "responses": responses,
-        "queries_udp": q["udp", "ipv4"] + q["udp", "ipv6"],
-        "queries_tcp": q["tcp", "ipv4"] + q["tcp", "ipv6"],
-        "queries_ipv4": q["udp", "ipv4"] + q["tcp", "ipv4"],
-        "queries_ipv6": q["udp", "ipv6"] + q["tcp", "ipv6"],
+        "queries_udp": queries_over("udp"),
+        "queries_tcp": queries_over("tcp"),
+        "queries_ipv4": queries_over("ipv4"),
+        "queries_ipv6": queries_over("ipv6"),
         "answer_ratio": _div(responses, queries),
-        "ipv6_share": _div(q["udp", "ipv6"] + q["tcp", "ipv6"], queries),
-        "tcp_share": _div(q["tcp", "ipv4"] + q["tcp", "ipv6"], queries),
+        "ipv6_share": _div(queries_over("ipv6"), queries),
+        # Of UDP and TCP only: the share is read as a sign of truncated UDP responses.
+        "tcp_share": _div(queries_over("tcp"), udp_tcp),
+        "encrypted_share": _div(encrypted, queries) if reports_extra else None,
         **{f"q_{proto}_{ip}": count for (proto, ip), count in q.items()},
         **{f"r_{proto}_{ip}": count for (proto, ip), count in r.items()},
     }
@@ -131,8 +150,8 @@ def _sizes(report: dict) -> dict:
     return values
 
 
-# The eight traffic-volume counters, as series names: q = queries received, r = responses sent.
-BREAKDOWN = tuple(f"{side}_{proto}_{ip}" for side in ("q", "r") for proto in ("udp", "tcp") for ip in ("ipv4", "ipv6"))
+# The traffic-volume counters, as series names: q = queries received, r = responses sent.
+BREAKDOWN = tuple(f"{side}_{proto}_{ip}" for side in ("q", "r") for proto in TRANSPORTS for ip in IP_VERSIONS)
 
 
 def _mean(values: list) -> float | None:
@@ -162,7 +181,7 @@ def _summarise(columns: dict[str, list], window: slice, minimum_days: int = 1) -
     return {
         "queries": _mean(col("queries")) if covered("queries") else None,
         "ipv6_share": _ratio_of_sums(col("queries_ipv6"), col("queries")) if covered("queries") else None,
-        "tcp_share": _ratio_of_sums(col("queries_tcp"), col("queries")) if covered("queries") else None,
+        "tcp_share": _ratio_of_sums(col("queries_tcp"), col("queries_udp_tcp")) if covered("queries") else None,
         "nxdomain_share": _ratio_of_sums(col("nxdomain"), col("rcode_total")) if covered("rcode_total") else None,
         "sources": _mean(col("sources")) if covered("sources") else None,
     }
@@ -209,7 +228,7 @@ def build_series(
     if derived_only:
         return result
 
-    extra = ("queries_udp", "queries_tcp", "queries_ipv4", "queries_ipv6", *BREAKDOWN)
+    extra = ("queries_udp", "queries_tcp", "queries_encrypted", "queries_ipv4", "queries_ipv6", *BREAKDOWN)
     percentiles = [
         f"{p}_{side}_{q}" for p in ("udp", "tcp") for side in ("request", "response") for q in ("p50", "p95")
     ]
@@ -257,17 +276,20 @@ def build_size_matrix(store: Store, source_id: int, server: str, first: dt.date,
     """Message counts per day and 16-byte size step, for the size heatmaps.
 
     Each histogram is a row per day (None for a day without a report) and a column per size
-    step, cut off after the largest step that is ever non-zero.
+    step, cut off after the largest step that is ever non-zero. The TLS and QUIC histograms
+    are given when a report in the period has them, with None for the days it does not.
     """
     days = [(first + dt.timedelta(days=offset)).isoformat() for offset in range((last - first).days + 1)]
     reports = store.load_metric(source_id, server, "traffic-sizes", days[0], days[-1])
     histograms = {}
-    for name, open_lower in SIZE_HISTOGRAMS.items():
-        top = max((lower for report in reports.values() for lower, _ in report[name]), default=0)
+    for name, open_lower in {**SIZE_HISTOGRAMS, **EXTRA_SIZE_HISTOGRAMS}.items():
+        if name in EXTRA_SIZE_HISTOGRAMS and not any(name in report for report in reports.values()):
+            continue
+        top = max((lower for report in reports.values() for lower, _ in report.get(name, ())), default=0)
         width = top // BUCKET_WIDTH + 1
         rows = []
         for day in days:
-            if day not in reports:
+            if name not in reports.get(day, ()):
                 rows.append(None)
                 continue
             row = [0] * width
@@ -299,8 +321,16 @@ def _total(report: dict, side: str) -> int:
     return sum(count for name, count in report.items() if side in name)
 
 
-def _histogram_total(report: dict, side: str) -> int:
-    return sum(count for name, histogram in report.items() if side in name for _, count in histogram)
+def _sized(volume: dict, sizes: dict, side: str) -> tuple[int, int]:
+    """Messages counted by traffic-volume and by the size histograms, over the same transports.
+
+    UDP and TCP always. TLS and QUIC only when the sizes report has a histogram for them: an
+    operator can count such traffic without giving its sizes.
+    """
+    counter = "queries-received" if side == "request" else "responses-sent"
+    transports = ["udp", "tcp", *(t for t in EXTRA_TRANSPORTS if f"{t}-{side}-sizes" in sizes)]
+    counted = sum(volume.get(f"dns-{t}-{counter}-{ip}", 0) for t in transports for ip in IP_VERSIONS)
+    return counted, sum(count for t in transports for _, count in sizes[f"{t}-{side}-sizes"])
 
 
 def _check(
@@ -372,7 +402,7 @@ def build_quality(store: Store, source_id: int, servers: list[str], first: dt.da
         ),
         _check(
             "Response codes account for the responses",
-            "The response-code counts (without code −1) add up to the responses sent.",
+            "The response-code counts (without code −1) add up to the responses sent over all transports.",
             0.01,
             [
                 (d, _total(volume[d][""], "responses-sent"), rcode_sum(r, False))
@@ -382,23 +412,15 @@ def build_quality(store: Store, source_id: int, servers: list[str], first: dt.da
         ),
         _check(
             "Size histograms account for the queries",
-            "The query-size histograms add up to the queries received.",
+            "The query-size histograms add up to the queries received over the same transports.",
             0.01,
-            [
-                (d, _total(volume[d][""], "queries-received"), _histogram_total(r, "request"))
-                for d, r in combined(sizes)
-                if "" in volume.get(d, {})
-            ],
+            [(d, *_sized(volume[d][""], r, "request")) for d, r in combined(sizes) if "" in volume.get(d, {})],
         ),
         _check(
             "Size histograms account for the responses",
-            "The response-size histograms add up to the responses sent.",
+            "The response-size histograms add up to the responses sent over the same transports.",
             0.01,
-            [
-                (d, _total(volume[d][""], "responses-sent"), _histogram_total(r, "response"))
-                for d, r in combined(sizes)
-                if "" in volume.get(d, {})
-            ],
+            [(d, *_sized(volume[d][""], r, "response")) for d, r in combined(sizes) if "" in volume.get(d, {})],
         ),
         _check(
             "No nameserver sees more sources than all together",

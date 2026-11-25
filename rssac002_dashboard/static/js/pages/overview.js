@@ -32,14 +32,28 @@ const BREAKDOWN = [
   ["tcp_ipv6", "TCP over IPv6", 4],
 ];
 
+// Transports outside RSSAC002, which a few operators report in fields of their own.
+// Their lines are drawn only for a service that reports them in the period.
+const EXTRA_BREAKDOWN = [
+  ["tls_ipv4", "TLS over IPv4", 5],
+  ["tls_ipv6", "TLS over IPv6", 6],
+  ["quic_ipv4", "QUIC over IPv4", 7],
+  ["quic_ipv6", "QUIC over IPv6", 8],
+];
+const EXTRA_STATISTICS = ["queries_udp_tcp", "encrypted_share"];
+const EXTRA_NOTE = "TLS and QUIC are not part of RSSAC002: the operator reports them in fields of its own.";
+
 const HEATMAPS = [
   ["udp-request-sizes", "UDP queries"],
   ["udp-response-sizes", "UDP responses"],
   ["tcp-request-sizes", "TCP queries"],
   ["tcp-response-sizes", "TCP responses"],
+  // Only present when the operator publishes sizes for DNS over TLS.
+  ["tls-request-sizes", "TLS queries"],
+  ["tls-response-sizes", "TLS responses"],
 ];
 
-const STATISTICS = ["queries", "responses", "answer_ratio", "ipv6_share", "tcp_share", "noerror_share", "nxdomain_share", "noresponse_share", "sources_ipv4", "sources_ipv6", "sources_ipv6_64", "queries_per_source", "udp_response_p50"];
+const STATISTICS = ["queries", "queries_udp_tcp", "responses", "answer_ratio", "ipv6_share", "tcp_share", "encrypted_share", "noerror_share", "nxdomain_share", "noresponse_share", "sources_ipv4", "sources_ipv6", "sources_ipv6_64", "queries_per_source", "udp_response_p50"];
 
 function figures(data, days) {
   const { current, previous } = data.summary;
@@ -135,7 +149,7 @@ function matrixCsv(days, rows, stepBytes, openLower) {
 }
 
 function heatmapCard(sizes, share, go, context) {
-  const panels = HEATMAPS.map(([name, label]) => {
+  const panels = HEATMAPS.filter(([name]) => sizes.histograms[name]).map(([name, label]) => {
     const { rows, steps, open_lower: openLower } = sizes.histograms[name];
     const shown = share
       ? rows.map((row) => {
@@ -158,7 +172,7 @@ function heatmapCard(sizes, share, go, context) {
   );
   const element = card(
     "Message sizes per day",
-    share ? "Each column is a day and adds up to 100%, so a change in colour is a change in the size mix, not in traffic volume." : "Each column is a day, each row a 16-byte size step. All four panels share one colour scale.",
+    share ? "Each column is a day and adds up to 100%, so a change in colour is a change in the size mix, not in traffic volume." : "Each column is a day, each row a 16-byte size step. All panels share one colour scale.",
     h(
       "div",
       { class: "heat-grid" },
@@ -200,8 +214,8 @@ function responseCodes(data) {
   return card("Response codes over the period", "Totals over the period, as a share of all counted exchanges and as a count. “No response” is the generator’s code −1: a query with no matched response.", rankedBars(rows));
 }
 
-function statistics(data, measures) {
-  const rows = STATISTICS.map((key) => {
+function statistics(data, measures, keys) {
+  const rows = keys.map((key) => {
     const { label, unit } = measures[key];
     const stats = describe(data.derived[key]);
     if (!stats) return h("tr", {}, h("th", { scope: "row" }, label), h("td", { colSpan: 7 }, "no data"));
@@ -240,6 +254,12 @@ export const overview = {
     const base = { days, smoothed, events, context: `${scopeName}, ${formatRange(first, last)}` };
     const params = { source: source.id, server, from: first, to: last };
 
+    // TLS and QUIC, where the service reports them: a value on any day, zero included.
+    const reported = (values) => values.some((value) => value !== null && value !== undefined);
+    const breakdown = (side) => [...BREAKDOWN, ...EXTRA_BREAKDOWN.filter(([key]) => reported(series[`${side}_${key}`]))];
+    const encrypted = reported(derived.encrypted_share);
+    const shareSpan = encrypted ? 6 : 4;
+
     const who = [source.operator, countryName(source.country)].filter(Boolean).join(", ");
     const scope = server ? `Nameserver ${server} only. ` : "";
     const coverage = `${formatRange(first, last)} (UTC days), reports for ${summary.days_with_data} of ${summary.days} days.`;
@@ -275,7 +295,7 @@ export const overview = {
     );
     sizes.querySelector(".section-head").append(sizeToggle);
 
-    const summaryStatistics = section("Summary statistics", "Descriptive statistics of the daily values, for quoting or checking against your own analysis.", statistics(data, meta.measures));
+    const summaryStatistics = section("Summary statistics", "Descriptive statistics of the daily values, for quoting or checking against your own analysis.", statistics(data, meta.measures, STATISTICS.filter((key) => encrypted || !EXTRA_STATISTICS.includes(key))));
     summaryStatistics.querySelector(".section-head").append(h("a", { class: "button", href: api.csvUrl(params) }, "Download daily values (CSV)"));
 
     return h(
@@ -288,7 +308,7 @@ export const overview = {
 
       section(
         "Traffic volume",
-        "From the traffic-volume metric: DNS queries received and responses sent per UTC day, by transport and IP version.",
+        `From the traffic-volume metric: DNS queries received and responses sent per UTC day, by transport and IP version.${encrypted ? ` The totals include DNS over TLS and QUIC. ${EXTRA_NOTE}` : ""}`,
         h(
           "div",
           { class: "grid" },
@@ -296,16 +316,17 @@ export const overview = {
           lineCard({
             ...base,
             title: "Queries received by transport and IP version",
-            note: "On a logarithmic axis, because UDP carries roughly a hundred times more queries than TCP.",
+            note: `On a logarithmic axis, because UDP carries roughly a hundred times more queries than TCP.${encrypted ? ` ${EXTRA_NOTE}` : ""}`,
             unit: "count",
             scale: "log",
             axis: "Queries per UTC day",
-            series: BREAKDOWN.map(([key, label, color]) => line(label, color, series[`q_${key}`])),
+            series: breakdown("q").map(([key, label, color]) => line(label, color, series[`q_${key}`])),
           }),
-          lineCard({ ...base, title: "Responses sent by transport and IP version", note: "Same axis as the queries beside it.", unit: "count", scale: "log", axis: "Responses per UTC day", series: BREAKDOWN.map(([key, label, color]) => line(label, color, series[`r_${key}`])) }),
-          lineCard({ ...base, title: "IPv6 share of queries", note: "UDP and TCP together.", unit: "share", axis: "Share of queries received", span: 4, series: [line("IPv6 share of queries", 1, derived.ipv6_share)] }),
-          lineCard({ ...base, title: "TCP share of queries", note: "A rise can point to truncated UDP responses.", unit: "share", axis: "Share of queries received", span: 4, series: [line("TCP share of queries", 1, derived.tcp_share)] }),
-          lineCard({ ...base, title: "Responses per query", note: "Below 1.00, some queries went unanswered.", unit: "ratio", axis: "Responses sent divided by queries received", span: 4, series: [line("Responses per query", 1, derived.answer_ratio)] }),
+          lineCard({ ...base, title: "Responses sent by transport and IP version", note: "Same axis as the queries beside it.", unit: "count", scale: "log", axis: "Responses per UTC day", series: breakdown("r").map(([key, label, color]) => line(label, color, series[`r_${key}`])) }),
+          lineCard({ ...base, title: "IPv6 share of queries", note: "All transports together.", unit: "share", axis: "Share of queries received", span: shareSpan, series: [line("IPv6 share of queries", 1, derived.ipv6_share)] }),
+          lineCard({ ...base, title: "TCP share of queries", note: `A rise can point to truncated UDP responses.${encrypted ? " Of the queries over UDP and TCP, without TLS and QUIC." : ""}`, unit: "share", axis: "Share of queries received over UDP and TCP", span: shareSpan, series: [line("TCP share of queries", 1, derived.tcp_share)] }),
+          encrypted ? lineCard({ ...base, title: "TLS and QUIC share of queries", note: `Queries over TLS and QUIC divided by all queries received. ${EXTRA_NOTE}`, unit: "share", axis: "Share of queries received", span: shareSpan, series: [line("TLS and QUIC share of queries", 1, derived.encrypted_share)] }) : null,
+          lineCard({ ...base, title: "Responses per query", note: "Below 1.00, some queries went unanswered.", unit: "ratio", axis: "Responses sent divided by queries received", span: shareSpan, series: [line("Responses per query", 1, derived.answer_ratio)] }),
         ),
       ),
 

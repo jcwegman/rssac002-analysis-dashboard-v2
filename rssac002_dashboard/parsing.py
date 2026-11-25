@@ -23,12 +23,36 @@ TRAFFIC_VOLUME_FIELDS = tuple(
 )
 UNIQUE_SOURCES_FIELDS = ("num-sources-ipv4", "num-sources-ipv6", "num-sources-ipv6-aggregate")
 
+# RSSAC002 counts DNS over UDP and TCP only. An operator that also serves DNS over TLS or QUIC
+# reports it in fields of its own, named like the standard ones with a prefix in front:
+# b-dns-tls-queries-received-ipv4, h-quic-response-sizes. They are read under one name per
+# transport, whichever prefix or spelling the operator uses. H named them dot and doq at first.
+EXTRA_TRANSPORTS = ("tls", "quic")
+_TRANSPORT_NAMES = {"tls": "tls", "dot": "tls", "quic": "quic", "doq": "quic"}
+EXTRA_TRAFFIC_VOLUME_FIELDS = tuple(
+    f"dns-{proto}-{side}-{ip}"
+    for side in ("queries-received", "responses-sent")
+    for proto in EXTRA_TRANSPORTS
+    for ip in ("ipv4", "ipv6")
+)
+_PREFIX = r"[a-z0-9][a-z0-9._-]*?"
+# B named its TLS responses "queries-sent" from January to May 2024.
+_EXTRA_VOLUME_RE = re.compile(
+    rf"^{_PREFIX}-dns-(?P<proto>[a-z0-9]+)-(?P<side>queries-received|responses-sent|queries-sent)-(?P<ip>ipv[46])$"
+)
+_EXTRA_SIZES_RE = re.compile(rf"^{_PREFIX}-(?P<proto>[a-z0-9]+)-(?P<side>request|response)-sizes$")
+
 # Histogram name -> lower bound of its open-ended last bucket.
 SIZE_HISTOGRAMS = {
     "udp-request-sizes": 288,
     "tcp-request-sizes": 288,
     "udp-response-sizes": 4096,
     "tcp-response-sizes": 4096,
+}
+EXTRA_SIZE_HISTOGRAMS = {
+    f"{proto}-{side}-sizes": open_lower
+    for proto in EXTRA_TRANSPORTS
+    for side, open_lower in (("request", 288), ("response", 4096))
 }
 BUCKET_WIDTH = 16
 
@@ -92,8 +116,28 @@ def _start_period(value) -> dt.datetime:
 
 
 def _traffic_volume(doc: dict, warnings: list[str]) -> dict:
+    """The eight UDP and TCP counters, and the TLS and QUIC counters the report has.
+
+    An omitted UDP or TCP counter is zero. A TLS or QUIC counter is only present when the
+    operator reports it, so that "not reported" stays distinct from zero.
+    """
     data = {name: _count(doc.get(name, 0), name) for name in TRAFFIC_VOLUME_FIELDS}
-    _warn_unknown(doc, TRAFFIC_VOLUME_FIELDS, warnings)
+    extra: dict[str, int] = {}
+    read_from: dict[str, str] = {}
+    for key in doc:
+        match = _EXTRA_VOLUME_RE.match(key) if isinstance(key, str) else None
+        if match is None or match["proto"] not in _TRANSPORT_NAMES:
+            continue
+        side = match["side"]
+        if side == "queries-sent":
+            side = "responses-sent"
+            warnings.append(f"{key} is read as responses sent")
+        name = f"dns-{_TRANSPORT_NAMES[match['proto']]}-{side}-{match['ip']}"
+        if name in extra:
+            raise ReportError(f"{read_from[name]} and {key} both give the same counter")
+        extra[name], read_from[name] = _count(doc[key], key), key
+    data.update({name: extra[name] for name in EXTRA_TRAFFIC_VOLUME_FIELDS if name in extra})
+    _warn_unknown(doc, (*TRAFFIC_VOLUME_FIELDS, *read_from.values()), warnings)
     return data
 
 
@@ -174,8 +218,20 @@ def _histogram(name: str, raw, open_lower: int, warnings: list[str]) -> list[lis
 
 
 def _traffic_sizes(doc: dict, warnings: list[str]) -> dict:
+    """The four UDP and TCP histograms, and the TLS and QUIC histograms the report has."""
     data = {name: _histogram(name, doc.get(name), open_lower, warnings) for name, open_lower in SIZE_HISTOGRAMS.items()}
-    _warn_unknown(doc, SIZE_HISTOGRAMS, warnings)
+    extra: dict[str, list] = {}
+    read_from: dict[str, str] = {}
+    for key in doc:
+        match = _EXTRA_SIZES_RE.match(key) if isinstance(key, str) else None
+        if match is None or match["proto"] not in _TRANSPORT_NAMES:
+            continue
+        name = f"{_TRANSPORT_NAMES[match['proto']]}-{match['side']}-sizes"
+        if name in extra:
+            raise ReportError(f"{read_from[name]} and {key} both give the same histogram")
+        extra[name], read_from[name] = _histogram(key, doc[key], EXTRA_SIZE_HISTOGRAMS[name], warnings), key
+    data.update({name: extra[name] for name in EXTRA_SIZE_HISTOGRAMS if name in extra})
+    _warn_unknown(doc, (*SIZE_HISTOGRAMS, *read_from.values()), warnings)
     return data
 
 

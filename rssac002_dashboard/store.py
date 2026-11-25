@@ -15,9 +15,9 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from .parsing import ParsedReport
+from .parsing import ParsedReport, ReportError, parse_report
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SOURCES_TABLE = """CREATE TABLE IF NOT EXISTS sources (
     id            INTEGER PRIMARY KEY,
@@ -95,6 +95,10 @@ class Store:
         self._upgrade()
         with self.connect() as conn:
             conn.executescript(SCHEMA)
+            version = conn.execute("PRAGMA user_version").fetchone()[0]
+        if version < 3:
+            self._reread_reports()
+        with self.connect() as conn:
             conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     def _upgrade(self) -> None:
@@ -124,6 +128,32 @@ class Store:
             conn.execute("COMMIT")
         finally:
             conn.close()
+
+    def _reread_reports(self) -> None:
+        """Read stored reports again from their original YAML, for a database made by an earlier version.
+
+        Version 3 reads the TLS and QUIC fields that some operators add to their reports, which
+        earlier versions noted as ignored. A scan would not pick them up, because it leaves alone
+        a file that has not changed. Only reports with an ignored field can come out differently,
+        so only those are read again. Totals of several services are not touched here: the next
+        scan computes them again, and the server scans when it starts.
+        """
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT r.id, r.metric, r.raw, r.data, r.warnings FROM reports r "
+                "JOIN sources s ON s.id = r.source_id "
+                "WHERE s.kind != 'aggregate' AND r.warnings LIKE '%ignored unknown field%'"
+            )
+            changed = []
+            for row in rows:
+                try:
+                    report = parse_report(row["raw"], expected_metric=row["metric"])
+                except ReportError:  # keeps the values it was stored with
+                    continue
+                values = (json.dumps(report.data, separators=(",", ":")), json.dumps(report.warnings))
+                if values != (row["data"], row["warnings"]):
+                    changed.append((*values, row["id"]))
+            conn.executemany("UPDATE reports SET data = ?, warnings = ? WHERE id = ?", changed)
 
     def close_interrupted_scans(self) -> None:
         """Mark scans left 'running' by a stopped server as failed. Call once when the server starts.

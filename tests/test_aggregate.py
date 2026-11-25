@@ -113,3 +113,56 @@ def test_missing_member_is_explained(store):
 
 def test_aggregate_locations_are_recognised():
     assert normalize_location(" Aggregate: b-root , a-root,a-root ") == ("aggregate", "aggregate:a-root,b-root")
+
+
+def with_tls(store, tmp_path, sizes_too=True):
+    """The two services of make(), where only 'aa' reports TLS on the first day, and their total."""
+    ids = make(store, tmp_path)
+    volume = {"aa-dns-tls-queries-received-ipv4": 50, "aa-dns-tls-responses-sent-ipv4": 48}
+    write_report(
+        tmp_path / "aa", "aa", DAYS[0], "traffic-volume", text=report_text("traffic-volume", DAYS[0], **volume)
+    )
+    if sizes_too:
+        sizes = {"aa-tls-request-sizes": {"48-63": 50}, "aa-tls-response-sizes": {"96-111": 48}}
+        write_report(
+            tmp_path / "aa", "aa", DAYS[0], "traffic-sizes", text=report_text("traffic-sizes", DAYS[0], **sizes)
+        )
+    scan(store, ids["aa"], "full")
+    scan(store, ids["total"])
+    return ids
+
+
+def raw_of(store, source_id, metric, day):
+    return store.list_reports(source_id=source_id, metric=metric, first=day, last=day, with_raw=True)[0]["raw"]
+
+
+def test_tls_of_the_members_that_report_it_is_added_to_the_total(store, tmp_path):
+    ids = with_tls(store, tmp_path)
+    data = build_series(store, ids["total"], "", DAYS[0], DAYS[1])
+    assert data["derived"]["queries"] == [2050, 2000]
+    assert data["derived"]["queries_udp_tcp"] == [2000, 2000]
+    assert data["series"]["q_tls_ipv4"] == [50, None]  # nobody reports TLS on the second day
+    assert data["series"]["r_tls_ipv4"] == [48, None]
+
+    raw = raw_of(store, ids["total"], "traffic-volume", "2026-05-01")
+    # In the published file the fields carry the total's own prefix, like an operator's own fields.
+    assert yaml.safe_load(raw)["both-dns-tls-queries-received-ipv4"] == 50
+    assert "# TLS is not part of RSSAC002." in raw and raw.split("# TLS")[1].splitlines()[0].endswith(": aa.")
+    assert "QUIC" not in raw
+    assert "TLS" not in raw_of(store, ids["total"], "traffic-volume", "2026-05-02")
+
+
+def test_tls_sizes_are_in_the_total_only_when_every_member_with_tls_gives_them(store, tmp_path):
+    ids = with_tls(store, tmp_path)
+    document = yaml.safe_load(raw_of(store, ids["total"], "traffic-sizes", "2026-05-01"))
+    assert document["both-tls-request-sizes"] == {"48-63": 50}
+    assert "both-tls-request-sizes" not in yaml.safe_load(raw_of(store, ids["total"], "traffic-sizes", "2026-05-02"))
+
+    # Now 'bb' counts TLS as well, without sizes: a histogram of only 'aa' would not be the total's.
+    volume = report_text("traffic-volume", DAYS[0], **{"bb-dns-tls-queries-received-ipv6": 9})
+    write_report(tmp_path / "bb", "bb", DAYS[0], "traffic-volume", text=volume)
+    scan(store, ids["bb"], "full")
+    scan(store, ids["total"])
+    raw = raw_of(store, ids["total"], "traffic-sizes", "2026-05-01")
+    assert "tls" not in raw.lower()
+    assert build_series(store, ids["total"], "", DAYS[0], DAYS[0])["derived"]["queries"] == [2059]

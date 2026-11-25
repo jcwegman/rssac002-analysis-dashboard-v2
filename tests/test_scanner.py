@@ -127,3 +127,39 @@ def test_database_from_before_the_rename_is_upgraded_with_its_data(tmp_path, tre
         name="b.root-servers.net", short_service="b-root", operator="", country="", kind="git", location=str(tree)
     )
     assert len(Store(path).list_sources()) == 2
+
+
+def test_database_from_before_tls_and_quic_were_read_gets_them_from_the_stored_files(store, source, tree):
+    """Earlier versions noted an operator's TLS fields as ignored. The files are kept, so they are read again."""
+    import json
+    import sqlite3
+
+    from rssac002_dashboard.analytics import build_series
+    from rssac002_dashboard.store import Store
+
+    day = dt.date(2026, 5, 2)
+    with_tls = report_text("traffic-volume", day, **{"nl-dns-tls-queries-received-ipv4": 50, "something-else": 1})
+    write_report(tree, "nl", day, "traffic-volume", text=with_tls)
+    scan(store, source)
+    # Put the database back in the state an earlier version left it in.
+    old = sqlite3.connect(store.path)
+    stored = json.loads(
+        old.execute("SELECT data FROM reports WHERE day = '2026-05-02' AND metric = 'traffic-volume'").fetchone()[0]
+    )
+    del stored["dns-tls-queries-received-ipv4"]
+    notes = ["ignored unknown field 'nl-dns-tls-queries-received-ipv4'", "ignored unknown field 'something-else'"]
+    old.execute(
+        "UPDATE reports SET data = ?, warnings = ? WHERE day = '2026-05-02' AND metric = 'traffic-volume'",
+        (json.dumps(stored), json.dumps(notes)),
+    )
+    old.execute("PRAGMA user_version = 2")
+    old.commit()
+    old.close()
+    assert build_series(store, source["id"], "", day, day)["derived"]["queries"] == [1000]
+    assert scan(store, source)[0]["imported"] == 0  # a scan leaves the unchanged file alone
+
+    upgraded = Store(store.path)
+    data = build_series(upgraded, source["id"], "", day, day)
+    assert data["derived"]["queries"] == [1050] and data["series"]["q_tls_ipv4"] == [50]
+    report = upgraded.list_reports(source_id=source["id"], server="", metric="traffic-volume", first="2026-05-02")[1]
+    assert (report["day"], report["warnings"]) == ("2026-05-02", ["ignored unknown field 'something-else'"])
