@@ -272,6 +272,27 @@ def build_series(
     return result
 
 
+def with_unnamed_rcodes_summed(data: dict) -> dict:
+    """The series as the page gets them: response codes without a name are one summed series.
+
+    A service can report hundreds of such codes, as one root server does. Each would be a series
+    of its own, which the page only adds up into its "Other codes" line; for the total of the
+    root servers they were four fifths of the data sent. The CSV download keeps a column per code.
+    """
+    unnamed = [code for code in data.get("rcodes", ()) if int(code) not in RCODE_NAMES]
+    if not unnamed:
+        return data
+    per_day = zip(*(data["rcodes"][code] for code in unnamed), strict=True)
+    return {
+        **data,
+        "rcodes": {code: values for code, values in data["rcodes"].items() if code not in unnamed},
+        "rcodes_unnamed": {
+            "codes": [int(code) for code in unnamed],
+            "values": [None if counts[0] is None else sum(counts) for counts in per_day],
+        },
+    }
+
+
 def build_size_matrix(store: Store, source_id: int, server: str, first: dt.date, last: dt.date) -> dict:
     """Message counts per day and 16-byte size step, for the size heatmaps.
 

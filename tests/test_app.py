@@ -287,3 +287,24 @@ def test_zip_downloads_are_capped(tmp_path, tree):
         )
         small = client.get("/api/archive", params={"source": 1, "server": "", "from": "2026-05-01", "to": "2026-05-01"})
         assert small.status_code == 200
+
+
+def test_unnamed_response_codes_reach_the_page_as_one_series_and_the_csv_in_full(client, tree):
+    """One root server reports hundreds of codes that are no DNS response code. The page only adds them up."""
+    import datetime as dt
+
+    from .conftest import report_text, write_report
+
+    day = dt.date(2026, 5, 2)
+    write_report(tree, "nl", day, "rcode-volume", text=report_text("rcode-volume", day, **{"300": 7, "4000": 2}))
+    store = client.app.state.store
+    run_scan(store, store.get_source(1), "full", store.create_scan(1, "full"))
+
+    params = {"source": 1, "from": "2026-05-01", "to": "2026-05-04"}
+    series = client.get("/api/series", params=params).json()
+    assert set(series["rcodes"]) == {"-1", "0", "2", "3", "5"}
+    assert series["rcodes_unnamed"] == {"codes": [300, 4000], "values": [0, 9, 0, None]}
+    assert {row["code"] for row in series["rcode_totals"]} >= {300, 4000}  # still counted in the period's totals
+    header = client.get("/api/series.csv", params=params).text.splitlines()[0].split(",")
+    assert {"rcode_300", "rcode_4000"} <= set(header)
+    assert "rcodes_unnamed" not in client.get("/api/series", params={**params, "to": "2026-05-01"}).json()

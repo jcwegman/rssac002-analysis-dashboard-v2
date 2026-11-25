@@ -83,14 +83,18 @@ function otherCodesLabel(codes) {
   return `Other codes (${list})`;
 }
 
-/** One line per named response code that occurs, plus the sum of all other codes. */
-function rcodeSeries(rcodes, prepare) {
+/**
+ * One line per named response code that occurs, plus the sum of all other codes.
+ * `unnamed` is what the server has already added up: { codes, values }, for codes without a name.
+ */
+function rcodeSeries(rcodes, unnamed, prepare) {
   const named = new Set(NAMED_RCODES.map(([code]) => code));
   const series = NAMED_RCODES.filter(([code]) => rcodes[code]).map(([code, label, color]) => ({ label: code === "-1" ? label : `${label} (${code})`, color, values: prepare(rcodes[code]) }));
-  const others = Object.keys(rcodes).filter((code) => !named.has(code));
+  const listed = Object.keys(rcodes).filter((code) => !named.has(code));
+  const others = [...listed.map(Number), ...(unnamed?.codes || [])].sort((a, b) => a - b);
   if (others.length) {
-    const length = rcodes[others[0]].length;
-    const sum = Array.from({ length }, (_, day) => (rcodes[others[0]][day] === null ? null : others.reduce((total, code) => total + rcodes[code][day], 0)));
+    const first = listed.length ? rcodes[listed[0]] : unnamed.values;
+    const sum = first.map((value, day) => (value === null ? null : listed.reduce((total, code) => total + rcodes[code][day], unnamed ? unnamed.values[day] : 0)));
     series.push({ label: otherCodesLabel(others), color: 0, values: prepare(sum) });
   }
   return series;
@@ -360,7 +364,7 @@ export const overview = {
             axis: "Responses per UTC day",
             span: 12,
             height: 320,
-            series: rcodeSeries(data.rcodes, prepare),
+            series: rcodeSeries(data.rcodes, data.rcodes_unnamed, prepare),
           }),
           lineCard({ ...base, title: "NOERROR and NXDOMAIN shares", note: "NXDOMAIN: the queried name does not exist in the zone.", unit: "share", axis: "Share of all counted exchanges", series: [line("NXDOMAIN (3)", 2, derived.nxdomain_share), line("NOERROR (0)", 1, derived.noerror_share)] }),
           Object.assign(responseCodes(data), { className: "card span-6" }),

@@ -19,7 +19,14 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import __version__
-from .analytics import MEASURES, build_quality, build_series, build_size_matrix, series_csv
+from .analytics import (
+    MEASURES,
+    build_quality,
+    build_series,
+    build_size_matrix,
+    series_csv,
+    with_unnamed_rcodes_summed,
+)
 from .auth import COOKIE_NAME, REQUEST_HEADER, LoginThrottle, Sessions, verify_password
 from .config import Settings
 from .importers import IMPORTERS, add_sources
@@ -187,7 +194,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         parts: str = "all",
     ):
         source_or_404(source)
-        return build_series(store, source, server, *period(first, last), derived_only=parts == "derived")
+        data = build_series(store, source, server, *period(first, last), derived_only=parts == "derived")
+        return with_unnamed_rcodes_summed(data)
 
     @app.get("/api/series.csv")
     def series_as_csv(
