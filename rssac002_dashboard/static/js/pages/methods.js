@@ -20,6 +20,10 @@ const MEASURES = [
   ["Median and 95th percentile size", "The upper edge of the 16-byte step that contains the 50th or 95th percentile of messages. For the open-ended last step (288 bytes for queries, 4,096 for responses) the lower edge is given.", "traffic-sizes"],
 ];
 
+// The document that defines the measurements and the file format.
+const ADVISORY = "https://www.icann.org/en/system/files/files/rssac-002-measurements-root-22jun23-en.pdf";
+const advisory = (text) => h("a", { href: ADVISORY, rel: "noopener" }, text);
+
 const NOTES = [
   ["Days are UTC days", "Each report covers one day starting at 00:00 UTC. A report whose window starts at another time is imported with a note, which is shown beside the file on the Report files page."],
   ["Missing days are gaps", "A day without a report has no value. It is never shown or counted as zero, and it is left out of every mean, median and total. It does not mean the servers received no queries."],
@@ -33,11 +37,8 @@ const NOTES = [
   ["A year earlier", "The comparison uses the same period shifted back 364 days (52 weeks), so that weekdays line up."],
   ["Events", "Markers above a chart are events recorded by the dashboard\u2019s administrator, such as a capture outage. They are annotations, not derived from the data."],
   ["Consistency checks", "The Data quality page compares numbers that the metrics count in two ways, for example nameserver totals against the combined report. A difference above the stated tolerance is listed with the days concerned."],
-  [
-    "DNS over TLS and QUIC",
-    "RSSAC002 counts DNS over UDP and TCP only. Operators that also serve DNS over TLS or QUIC report it in fields of their own, named like the standard ones with a prefix in front, such as b-dns-tls-queries-received-ipv4. Among the root servers, b has done so since January 2024 and h since August 2026; h also gives the sizes of these messages. The dashboard reads these fields and counts them in queries received and responses sent, because the same operators’ response-code counts already include this traffic. Their lines appear in the transport charts of a service that reports them. A report without these fields adds nothing for them and shows them as not reported, not as zero. The names are the operators’: h called the fields dot and doq in its first week, which are read as TLS and QUIC, and b named its TLS responses “queries-sent” until May 2024. These counts have been part of queries per day since November 2026; before that, the dashboard left them out. “UDP and TCP queries” on the Compare page gives the figure without them.",
-  ],
-  ["Totals of several services", "A service such as root-servers.net is computed by the dashboard: for each day, the reports of all its members are added up. A day is given only when every member has a report for that metric; otherwise it is a gap, because a sum over fewer members is not the total. Unique sources are never added up, since an address that queries several members would be counted more than once, so such a service has none. TLS and QUIC counts are added up over the members that report them, and the total’s file names those members. Sizes of TLS and QUIC messages are given for the total only on days on which every member that counts such traffic also gives its sizes."],
+  ["DNS over TLS and QUIC", "RSSAC002 counts DNS over UDP and TCP only. Operators that also serve DNS over TLS or QUIC, such as b and h root, report it in fields of their own, which the advisory allows. The dashboard counts these in queries received and responses sent, and draws them as lines of their own. A service that does not report them shows them as not reported, not as zero. \u201cUDP and TCP queries\u201d on the Compare page gives the figure without them."],
+  ["Totals of several services", "A service such as root-servers.net is computed by the dashboard: for each day, the reports of all its members are added up. A day is given only when every member has a report for that metric; otherwise it is a gap, because a sum over fewer members is not the total. Unique sources are never added up, since an address that queries several members would be counted more than once, so such a service has none. TLS and QUIC counts are added up over the members that report them."],
   ["Summary statistics", "Computed over the daily values in the period. The standard deviation is the sample standard deviation (n − 1); CV is the standard deviation divided by the mean."],
   ["Validation", "Reports are checked on import. A report with a wrong type, a negative count or a malformed size step is rejected and listed in the source’s import history. A value explicitly set to null is treated as not reported."],
 ];
@@ -62,6 +63,13 @@ export const methods = {
 
       h("h2", {}, "Data"),
       h("p", {}, "The dashboard holds RSSAC002-style reports as published by each operator: one YAML file per metric per UTC day, for all nameservers together and, where published, per nameserver. Files are stored unchanged and can be read or downloaded on the ", h("a", { href: "#/reports" }, "Report files"), " page. Everything shown is computed from those files; the dashboard does not see DNS traffic itself."),
+      h(
+        "p",
+        {},
+        "RSSAC002 is an advisory of ICANN\u2019s Root Server System Advisory Committee that defines these measurements and the format of the files: ",
+        advisory("RSSAC002 version 5, \u201cRSSAC Advisory on Measurements of the Root Server System\u201d, 22 June 2023"),
+        ". It is written for the root servers; other operators, such as TLD registries, publish reports in the same format.",
+      ),
       sources.length
         ? table(
             ["Service", "Operator", "Country", "Reports", "First day", "Last day"],
