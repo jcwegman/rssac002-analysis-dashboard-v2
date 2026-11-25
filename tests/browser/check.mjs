@@ -85,8 +85,11 @@ check("a heatmap saves as a PNG image", (await until(`window.saved[1] && window.
 await js(`[...document.querySelectorAll(".heat-head .button")].find((one) => one.textContent.includes("CSV")).click()`);
 const matrix = await until(`window.saved[2] && window.saved[2].text()`);
 check("a heatmap's counts download as CSV", !!matrix && matrix.startsWith("day,0-15,16-31") && matrix.split("\n").length > 20);
+// Switching theme draws the page again. A chart can only be saved once it is drawn, so wait for
+// that: a click on "Save figure" during the redraw does nothing, and the check would time out.
+const redrawn = `!document.getElementById("main").classList.contains("loading") && document.querySelector(".plot > svg") && document.querySelector(".heat-frame canvas")`;
 await click("Dark theme");
-await until(`document.documentElement.dataset.theme === "dark" && document.querySelector(".heat-head .button")`);
+await until(`document.documentElement.dataset.theme === "dark" && ${redrawn}`);
 await click("Save figure");
 const darkFigure = await until(`window.saved[3] && window.saved[3].text().then((text) => new DOMParser().parseFromString(text, "image/svg+xml").querySelector("rect").getAttribute("fill"))`);
 await js(`document.querySelector(".heat-head .button").click()`);
@@ -95,7 +98,7 @@ await js(`window.pixels = (blob) => createImageBitmap(blob).then((image) => { co
 const darkHeatmap = await until(`window.saved[4] && Promise.all([window.pixels(window.saved[1]), window.pixels(window.saved[4])])`);
 check("figures are saved in the light theme while the dark theme is shown", darkFigure === "#ffffff" && !!darkHeatmap && darkHeatmap[0] === darkHeatmap[1] && (await js(`document.documentElement.dataset.theme`)) === "dark", `${darkFigure} ${darkHeatmap}`);
 await click("Light theme");
-await until(`document.documentElement.dataset.theme === "light" && document.querySelector(".heat-head .button")`);
+await until(`document.documentElement.dataset.theme === "light" && ${redrawn}`);
 await click("Share of the day");
 check("heatmaps switch to shares", !!(await until(`location.hash.includes("heat=share") && document.querySelector(".heat-legend")?.textContent.includes("share of that day")`)));
 await click("Cite this view");
