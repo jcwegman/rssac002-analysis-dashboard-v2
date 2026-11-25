@@ -148,22 +148,37 @@ function matrixCsv(days, rows, stepBytes, openLower) {
   return [["day", ...header].join(","), ...days.map((day, index) => [day, ...(rows[index] || Array(steps).fill(""))].join(","))].join("\n") + "\n";
 }
 
+// Responses are counted in 16-byte steps up to 4,096 bytes: more rows than a panel has pixels.
+// Their panels are drawn in rows of four steps.
+const RESPONSE_ROW_STEPS = 4;
+
+/** The rows of a panel with every `size` steps added up into one: { rows, steps }. */
+function coarserRows(rows, steps, size) {
+  const groups = Math.ceil(steps / size);
+  const sum = (values) => values.reduce((total, value) => total + value, 0);
+  return { rows: rows.map((row) => row && Array.from({ length: groups }, (_, group) => sum(row.slice(group * size, (group + 1) * size)))), steps: groups };
+}
+
 function heatmapCard(sizes, share, go, context) {
   const panels = HEATMAPS.filter(([name]) => sizes.histograms[name]).map(([name, label]) => {
-    const { rows, steps, open_lower: openLower } = sizes.histograms[name];
+    const { rows: counted, steps: counts, open_lower: openLower } = sizes.histograms[name];
+    const response = name.endsWith("response-sizes");
+    const { rows, steps } = response ? coarserRows(counted, counts, RESPONSE_ROW_STEPS) : { rows: counted, steps: counts };
+    const stepBytes = sizes.step_bytes * (response ? RESPONSE_ROW_STEPS : 1);
     const shown = share
       ? rows.map((row) => {
           const total = row ? row.reduce((sum, count) => sum + count, 0) : 0;
           return row && total ? row.map((count) => count / total) : row;
         })
       : rows;
-    return { label, rows, shown, steps, openLower };
+    // `counted` keeps every 16-byte step, for the CSV download.
+    return { label, counted, shown, steps, stepBytes, openLower };
   });
   let max = 0;
   for (const panel of panels) for (const row of panel.shown) if (row) for (const value of row) if (value > max) max = value;
   const [min, unit] = share ? [1e-6, "share"] : [1, "count"];
   if (share && max) max = 1;
-  const caption = `${share ? "Share of the day\u2019s messages" : "Messages per day"} in each 16-byte size step, logarithmic colour scale; vertical axis in bytes`;
+  const captionOf = (panel) => `${share ? "Share of the day\u2019s messages" : "Messages per day"} in each ${panel.stepBytes}-byte size step, logarithmic colour scale; vertical axis in bytes`;
   const toggle = h(
     "div",
     { class: "segmented", role: "group", "aria-label": "Heatmap values" },
@@ -172,12 +187,12 @@ function heatmapCard(sizes, share, go, context) {
   );
   const element = card(
     "Message sizes per day",
-    share ? "Each column is a day and adds up to 100%, so a change in colour is a change in the size mix, not in traffic volume." : "Each column is a day, each row a 16-byte size step. All panels share one colour scale.",
+    share ? "Each column is a day and adds up to 100%, so a change in colour is a change in the size mix, not in traffic volume." : "Each column is a day, each row a size step: 16 bytes for queries, 64 bytes for responses. All panels share one colour scale.",
     h(
       "div",
       { class: "heat-grid" },
       panels.map((panel) => {
-        const plot = heatmap({ days: sizes.days, rows: panel.shown, steps: panel.steps, stepBytes: sizes.step_bytes, openLower: panel.openLower, min, max, unit, label: `${panel.label}: messages per day and size step.` });
+        const plot = heatmap({ days: sizes.days, rows: panel.shown, steps: panel.steps, stepBytes: panel.stepBytes, openLower: panel.openLower, min, max, unit, label: `${panel.label}: messages per day and size step.` });
         const name = slug(`${context} ${panel.label} sizes`);
         return h(
           "div",
@@ -186,8 +201,8 @@ function heatmapCard(sizes, share, go, context) {
             "div",
             { class: "heat-head" },
             h("h4", {}, panel.label),
-            h("button", { class: "button quiet", type: "button", onclick: () => saveHeatmap(plot, { title: `${panel.label}, message sizes per day, ${context}`, caption, filename: name }) }, "Save figure"),
-            h("button", { class: "button quiet", type: "button", onclick: () => downloadText(`${name}.csv`, matrixCsv(sizes.days, panel.rows, sizes.step_bytes, panel.openLower)) }, "Download counts (CSV)"),
+            h("button", { class: "button quiet", type: "button", onclick: () => saveHeatmap(plot, { title: `${panel.label}, message sizes per day, ${context}`, caption: captionOf(panel), filename: name }) }, "Save figure"),
+            h("button", { class: "button quiet", type: "button", onclick: () => downloadText(`${name}.csv`, matrixCsv(sizes.days, panel.counted, sizes.step_bytes, panel.openLower)) }, "Download counts (CSV)"),
           ),
           plot,
         );
