@@ -176,6 +176,9 @@ def test_without_a_password_there_is_no_admin(tmp_path):
 def test_interface_and_security_headers(client):
     page = client.get("/")
     assert "RSSAC002 Analysis Dashboard" in page.text
+    # A link to the dashboard gets a description in search results and link previews.
+    assert '<meta name="description" content="Charts of the RSSAC002' in page.text
+    assert '<meta property="og:title"' in page.text
     # Visitors can see who made it, find the source and open an issue.
     assert "Jorrit Wegman, TU Delft" in page.text
     assert 'href="https://github.com/jcwegman/rssac002-analysis-dashboard-v2/issues"' in page.text

@@ -57,6 +57,7 @@ await send("Page.navigate", { url: `${base}/#/overview?range=all` });
 await until(`document.querySelectorAll(".plot > svg").length >= 12`);
 
 // --- overview ---------------------------------------------------------------------------
+check("the tab title names the service", (await js(`document.title`)) === ".example: Overview | RSSAC002 Analysis Dashboard", await js(`document.title`));
 check("overview draws its charts and four heatmaps", (await js(`document.querySelectorAll(".plot > svg").length`)) >= 13 && (await js(`document.querySelectorAll("canvas.heat-cells").length`)) === 4);
 const titles = await js(`[...document.querySelectorAll(".card h3")].map((one) => one.textContent).join("|")`);
 check("overview has the breakdown and per-code charts", ["Queries received by transport and IP version", "Responses per response code"].every((title) => titles.includes(title)), titles);

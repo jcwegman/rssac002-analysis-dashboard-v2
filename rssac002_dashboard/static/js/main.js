@@ -184,7 +184,9 @@ async function render() {
     leaveHandlers.forEach((handler) => handler());
     leaveHandlers = [];
     disposeCharts();
-    document.title = `${page.title} | RSSAC002 Analysis Dashboard`;
+    // The tab names the service the page is about, so that tabs of several services can be told apart.
+    const about = DATA_PAGES.includes(route) && selection.source ? [selection.source.name, selection.server].filter(Boolean).join(" ") : "";
+    document.title = `${about ? `${about}: ` : ""}${page.title} | RSSAC002 Analysis Dashboard`;
     await renderFilters(route, selection, token);
     if (token !== generation) return;
     main.replaceChildren(h("div", { class: "wrap" }, usable ? page.view(context, data) : emptyState()));
