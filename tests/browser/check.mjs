@@ -142,9 +142,16 @@ check("a period compares with 52 weeks earlier", !!(await until(`[...document.qu
 
 // --- reports, quality, methods ------------------------------------------------------------
 await goto("#/reports?range=7d", `document.querySelectorAll("table.data tbody tr").length >= 5`);
-check("report files are listed one day per row, with a file per metric", (await js(`document.querySelectorAll("table.data thead th").length`)) === 5 && (await js(`[...document.querySelectorAll("table.data tbody tr")].every((row) => row.querySelectorAll("a.button").length === 4)`)));
-await click("Read");
+check("report files are listed one day per row, with a file per metric", (await js(`document.querySelectorAll("table.data thead th").length`)) === 5 && (await js(`[...document.querySelectorAll("table.data tbody tr")].every((row) => row.querySelectorAll("button").length === 4)`)));
+await click("Open");
 check("a report file can be read in place", !!(await until(`document.querySelector("pre.yaml")?.textContent.includes("version: rssac002v5") && document.querySelector(".file-name")?.textContent.includes("traffic-volume.yaml")`)));
+check("and downloaded from there", (await js(`document.querySelector(".file-head a.button")?.getAttribute("href")`))?.endsWith("?download=1"));
+await click("Close");
+check("and closed again", !(await js(`document.querySelector("pre.yaml")`)));
+// The first demo service has days without reports: they show as a row of their own, not as a silent jump.
+await goto("#/reports?range=all", `document.querySelectorAll("table.data tbody tr").length >= 20`);
+await click(await js(`[...document.querySelectorAll("button")].find((one) => one.textContent.startsWith("Show all")).textContent`));
+check("days without files are a row that says so", (await until(`document.querySelectorAll("tr.gap").length`)) === 2 && (await js(`document.querySelector("tr.gap").textContent`)).includes("no files (1 day)"), await js(`[...document.querySelectorAll("tr.gap")].map((row) => row.textContent).join(" | ")`));
 await goto("#/quality?range=all", `document.querySelectorAll(".figures.three .figure").length === 3`);
 const quality = await js(`document.querySelector("main").textContent`);
 check("data quality reports gaps and checks", quality.includes("Nameserver query counts add up") && quality.includes("Missing days") && /Holds on all \d+ days/.test(quality));

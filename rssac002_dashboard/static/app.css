@@ -317,8 +317,25 @@ pre.yaml { margin: 0; padding: 12px 14px; background: var(--page); border-radius
 .status.failed::before { background: var(--critical); }
 .status.running::before, .status.queued::before { background: var(--series-4); }
 .actions { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
-.actions.start { justify-content: flex-start; margin-left: -6px; }
-.file-name { margin: 0 0 6px; color: var(--ink-2); font-size: 12.5px; }
+/* Report files: a day per row, a file per metric. */
+.files td .button.quiet { margin-left: -6px; }
+.files td .button.quiet[aria-expanded="true"] { font-weight: 600; }
+.files td .muted { font-size: 12.5px; margin-left: 4px; }
+.files tr.gap td { color: var(--muted); background: var(--page); font-size: 12.5px; }
+.files tr.detail td { white-space: normal; }
+.file-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
+.file-name { margin: 0; color: var(--ink-2); font-size: 12.5px; overflow-wrap: anywhere; }
+.file-note { margin: 0 0 4px; color: var(--ink-2); font-size: 12.5px; }
+@media (max-width: 560px) {
+  /* On a phone a day is a block: its date, then its files two beside each other, each named. */
+  .files table.data, .files tbody { display: block; }
+  .files thead { display: none; }
+  .files tbody tr { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 1px solid var(--line); padding: 6px 0; }
+  .files tbody th, .files tbody td { border-bottom: 0; padding: 2px 4px; white-space: normal; }
+  .files tbody th, .files tr.gap td, .files tr.detail td { grid-column: span 2; }
+  .files td[data-label]::before { content: attr(data-label); display: block; color: var(--muted); font-size: 12px; }
+  .files td .button.quiet { margin-left: -6px; }
+}
 .stack { display: grid; gap: 16px; }
 details.history { margin: 4px 0 10px; }
 details.history summary { cursor: pointer; color: var(--accent); }
