@@ -124,3 +124,90 @@ def test_change_is_only_given_against_a_well_covered_earlier_period(store, sourc
     assert half["previous_days_with_data"] == 1  # 30 April has no report, 1 May has
     assert half["previous"] == dict.fromkeys(half["previous"])  # one of two days: no figures at all
     assert half["current"]["queries"] == 1000
+
+
+def with_tls(store, source, tree, sizes=True):
+    """The 'nl' reports of the tree, with DNS over TLS and QUIC on 2 May as an operator reports them."""
+    from .conftest import report_text, write_report
+
+    day = dt.date(2026, 5, 2)
+    volume = {
+        "nl-dns-tls-queries-received-ipv4": 150,
+        "nl-dns-tls-queries-received-ipv6": 90,
+        "nl-dns-quic-queries-received-ipv4": 10,
+        "nl-dns-tls-responses-sent-ipv4": 150,
+        "nl-dns-tls-responses-sent-ipv6": 90,
+        "nl-dns-quic-responses-sent-ipv4": 10,
+    }
+    write_report(tree, "nl", day, "traffic-volume", text=report_text("traffic-volume", day, **volume))
+    # Like b and h root, the response codes count the responses over every transport.
+    write_report(tree, "nl", day, "rcode-volume", text=report_text("rcode-volume", day, **{"1": 250}))
+    if sizes:
+        histograms = {
+            "nl-tls-request-sizes": {"48-63": 240},
+            "nl-tls-response-sizes": {"96-111": 200, "4096-": 40},
+            "nl-quic-request-sizes": {"16-31": 10},
+            "nl-quic-response-sizes": {"848-863": 10},
+        }
+        write_report(tree, "nl", day, "traffic-sizes", text=report_text("traffic-sizes", day, **histograms))
+    run_scan(store, source, "new", store.create_scan(source["id"], "new"))
+
+
+def test_tls_and_quic_count_in_the_totals_and_have_series_of_their_own(store, source, tree):
+    with_tls(store, source, tree)
+    data = build_series(store, source["id"], "", dt.date(2026, 5, 1), dt.date(2026, 5, 2))
+    derived, series = data["derived"], data["series"]
+    assert derived["queries"] == [1000, 1250]
+    assert derived["queries_udp_tcp"] == [1000, 1000]
+    assert derived["responses"] == [985, 1235]
+    assert derived["ipv6_share"][1] == pytest.approx(330 / 1250)
+    assert derived["tcp_share"] == [pytest.approx(0.10), pytest.approx(0.10)]  # of UDP and TCP only
+    assert derived["encrypted_share"] == [None, pytest.approx(0.2)]  # not reported is a gap, not 0%
+    assert series["queries_encrypted"] == [None, 250]
+    assert series["q_tls_ipv6"] == [None, 90] and series["r_quic_ipv4"] == [None, 10]
+    assert series["q_quic_ipv6"] == [None, None]  # the operator left this one field out
+    assert data["summary"]["current"]["tcp_share"] == pytest.approx(0.10)
+    header = series_csv(data).splitlines()[0].split(",")
+    assert {"queries_udp_tcp", "encrypted_share", "q_tls_ipv4", "r_quic_ipv6"} <= set(header)
+
+
+def test_tls_size_histograms_are_in_the_matrix_only_when_reported(store, source, tree):
+    run_scan(store, source, "new", store.create_scan(source["id"], "new"))
+    plain = build_size_matrix(store, source["id"], "", dt.date(2026, 5, 1), dt.date(2026, 5, 2))
+    assert set(plain["histograms"]) == {
+        "udp-request-sizes",
+        "tcp-request-sizes",
+        "udp-response-sizes",
+        "tcp-response-sizes",
+    }
+    with_tls(store, source, tree)
+    store.delete_report(source["id"], "", "traffic-sizes", "2026-05-02")
+    run_scan(store, source, "new", store.create_scan(source["id"], "new"))
+    matrix = build_size_matrix(store, source["id"], "", dt.date(2026, 5, 1), dt.date(2026, 5, 2))
+    assert matrix["histograms"]["tls-request-sizes"]["rows"] == [None, [0, 0, 0, 240]]
+    assert matrix["histograms"]["tls-response-sizes"]["rows"][1][256] == 40
+
+
+@pytest.mark.parametrize("sizes", [True, False])
+def test_checks_hold_when_tls_is_counted_with_or_without_its_sizes(store, source, tree, sizes):
+    """h root gives sizes for its TLS and QUIC messages, b root does not; neither is a mismatch."""
+    with_tls(store, source, tree, sizes=sizes)
+    quality = build_quality(store, source["id"], [], dt.date(2026, 5, 2), dt.date(2026, 5, 2))
+    checks = {check["name"]: check for check in quality["checks"]}
+    assert checks["Response codes account for the responses"]["days_failing"] == 0
+    assert checks["Size histograms account for the queries"]["days_failing"] == 0
+    assert checks["Size histograms account for the responses"]["days_failing"] == 0
+    assert quality["notes"]["count"] == 0
+
+
+def test_tls_sizes_that_do_not_add_up_are_found(store, source, tree):
+    from .conftest import report_text, write_report
+
+    with_tls(store, source, tree)
+    day = dt.date(2026, 5, 2)
+    short = report_text("traffic-sizes", day, **{"nl-tls-request-sizes": {"48-63": 100}})
+    write_report(tree, "nl", day, "traffic-sizes", text=short)
+    run_scan(store, source, "full", store.create_scan(source["id"], "full"))
+    quality = build_quality(store, source["id"], [], day, day)
+    check = next(check for check in quality["checks"] if check["name"] == "Size histograms account for the queries")
+    assert check["examples"][0]["expected"] == 1240 and check["examples"][0]["actual"] == 1100

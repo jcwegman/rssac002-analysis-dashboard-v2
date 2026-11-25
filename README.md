@@ -12,6 +12,7 @@ It is one process with one SQLite file. The charts are drawn by the dashboard it
 
 - **Overview** of one service: every RSSAC002 traffic metric in charts, with a timeline of which days have reports.
 - **Compare** services, the nameservers of one service, or a period with the year before.
+- **DNS over TLS and QUIC**, which RSSAC002 does not cover, for operators that report them in fields of their own, such as b and h root.
 - **Data quality**: missing days and consistency checks on the reports.
 - **Report files**: read or download the original YAML, also served under `/rssac002/` in the standard layout.
 - **For research**: logarithmic axes, 7-day means, summary statistics, CSV and figure export, a citation for each view, and a Methods page that defines every measure.

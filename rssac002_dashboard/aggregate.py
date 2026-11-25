@@ -5,6 +5,11 @@ Used for "all root servers together". The rules that make the result a proper to
 - A day is only given when every member has a report for that metric. A sum over fewer
   members would not be the total, and would look like a traffic drop. Such days stay gaps.
 - Counts are added: queries and responses, responses per code, messages per size step.
+- TLS and QUIC are not part of RSSAC002, and only some members report them. Their counts are
+  added up over the members that do. Their size histograms are only given for a day on which
+  every member that counts a transport also gives its sizes; a histogram of some of that
+  traffic would not be the total's. The fields carry the aggregate's prefix, as operators do
+  for fields of their own.
 - Unique sources are not added. An address that queries several members would be counted
   once per member, so the total cannot be derived from the members' reports. The aggregate
   carries a unique-sources report without values, which the dashboard shows as "not reported".
@@ -20,7 +25,16 @@ import datetime as dt
 
 import yaml
 
-from .parsing import BUCKET_WIDTH, SIZE_HISTOGRAMS, UNIQUE_SOURCES_FIELDS, parse_report
+from .parsing import (
+    BUCKET_WIDTH,
+    EXTRA_SIZE_HISTOGRAMS,
+    EXTRA_TRAFFIC_VOLUME_FIELDS,
+    EXTRA_TRANSPORTS,
+    SIZE_HISTOGRAMS,
+    TRAFFIC_VOLUME_FIELDS,
+    UNIQUE_SOURCES_FIELDS,
+    parse_report,
+)
 from .store import Store, now
 
 PREFIX = "aggregate:"
@@ -38,10 +52,33 @@ def members_of(location: str) -> list[str]:
     return [member for member in location[len(PREFIX) :].split(",") if member]
 
 
-def combine(metric: str, reports: list[dict]) -> dict:
-    """The body of the aggregate report for one day, in RSSAC002 field names."""
+def reporting(transport: str, reports: list[dict | None]) -> list[int]:
+    """Positions of the members whose traffic-volume or traffic-sizes report has this transport."""
+    names = (f"dns-{transport}-", f"{transport}-")
+    return [position for position, report in enumerate(reports) if report and any(n.startswith(names) for n in report)]
+
+
+def sized_transports(sizes: list[dict], volumes: list[dict | None]) -> list[str]:
+    """The TLS and QUIC transports whose size histograms can be added up into a total for this day."""
+    return [
+        transport
+        for transport in EXTRA_TRANSPORTS
+        if reporting(transport, sizes) and set(reporting(transport, volumes)) <= set(reporting(transport, sizes))
+    ]
+
+
+def combine(metric: str, reports: list[dict], prefix: str = "", sized: list[str] | None = None) -> dict:
+    """The body of the aggregate report for one day, in RSSAC002 field names.
+
+    `prefix` goes in front of the TLS and QUIC fields. `sized` names the transports whose size
+    histograms are included, see sized_transports.
+    """
     if metric == "traffic-volume":
-        return {name: sum(report[name] for report in reports) for name in reports[0]}
+        body = {name: sum(report[name] for report in reports) for name in TRAFFIC_VOLUME_FIELDS}
+        for name in EXTRA_TRAFFIC_VOLUME_FIELDS:
+            if any(name in report for report in reports):
+                body[f"{prefix}-{name}"] = sum(report.get(name, 0) for report in reports)
+        return body
     if metric == "rcode-volume":
         codes: dict[int, int] = {}
         for report in reports:
@@ -49,13 +86,17 @@ def combine(metric: str, reports: list[dict]) -> dict:
                 codes[int(code)] = codes.get(int(code), 0) + count
         return dict(sorted(codes.items()))
     if metric == "traffic-sizes":
+        wanted = {name: (name, open_lower) for name, open_lower in SIZE_HISTOGRAMS.items()}
+        for name, open_lower in EXTRA_SIZE_HISTOGRAMS.items():
+            if name.split("-")[0] in (sized or ()):
+                wanted[f"{prefix}-{name}"] = (name, open_lower)
         body = {}
-        for name, open_lower in SIZE_HISTOGRAMS.items():
+        for field, (name, open_lower) in wanted.items():
             steps: dict[int, int] = {}
             for report in reports:
-                for lower, count in report[name]:
+                for lower, count in report.get(name, ()):
                     steps[lower] = steps.get(lower, 0) + count
-            body[name] = {
+            body[field] = {
                 (f"{lower}-" if lower >= open_lower else f"{lower}-{lower + BUCKET_WIDTH - 1}"): steps[lower]
                 for lower in sorted(steps)
             }
@@ -63,8 +104,11 @@ def combine(metric: str, reports: list[dict]) -> dict:
     return dict.fromkeys(UNIQUE_SOURCES_FIELDS)
 
 
-def render(service: str, metric: str, day: str, body: dict, members: list[str]) -> str:
-    """The aggregate report as YAML, marked as computed."""
+def render(service: str, metric: str, day: str, body: dict, members: list[str], extra: dict | None = None) -> str:
+    """The aggregate report as YAML, marked as computed.
+
+    `extra` names, per TLS or QUIC transport in the body, the members its counts come from.
+    """
     document = {
         "version": "rssac002v5",
         "service": service,
@@ -80,6 +124,13 @@ def render(service: str, metric: str, day: str, body: dict, members: list[str]) 
         )
     else:
         header += f"# The sum of the {metric} reports of {len(members)} services for this day: {', '.join(members)}.\n"
+    for transport, reporters in (extra or {}).items():
+        if not reporters:
+            continue
+        header += (
+            f"# {transport.upper()} is not part of RSSAC002. Its fields here add up what these services report "
+            f"in fields of their own: {', '.join(reporters)}.\n"
+        )
     return header + yaml.safe_dump(document, sort_keys=False, explicit_start=True)
 
 
@@ -100,21 +151,31 @@ def run(store: Store, source: dict, scan_id: int) -> dict:
     stored = {(metric, day) for server, metric, day in store.stored_hashes(source["id"]) if server == ""}
     produced: set[tuple[str, str]] = set()
     incomplete = dict.fromkeys(ADDITIVE, 0)
+    loaded = {
+        metric: [store.load_metric(by_prefix[member]["id"], "", metric, first, last) for member in members]
+        for metric in ADDITIVE
+    }
     for metric in ADDITIVE:
-        per_member = [store.load_metric(by_prefix[member]["id"], "", metric, first, last) for member in members]
+        per_member = loaded[metric]
         for day in sorted(set().union(*per_member)):
             counters["found"] += 1
             reports = [reports_by_day.get(day) for reports_by_day in per_member]
             if any(report is None for report in reports):
                 incomplete[metric] += 1
                 continue
+            sized = []
+            if metric == "traffic-sizes":
+                sized = sized_transports(reports, [by_day.get(day) for by_day in loaded["traffic-volume"]])
+            # The members that the TLS and QUIC numbers of this report come from, for its header.
+            shown = EXTRA_TRANSPORTS if metric == "traffic-volume" else sized
+            extra = {one: [members[position] for position in reporting(one, reports)] for one in shown}
             keys = [(metric, day)]
             if metric == "traffic-volume":  # a day with a total also gets the empty unique-sources report
                 keys.append(("unique-sources", day))
                 counters["found"] += 1
             for one_metric, one_day in keys:
-                body = combine(one_metric, reports)
-                raw = render(source["name"], one_metric, one_day, body, members)
+                body = combine(one_metric, reports, source["short_service"], sized)
+                raw = render(source["name"], one_metric, one_day, body, members, extra if one_metric == metric else {})
                 report = parse_report(raw, expected_metric=one_metric)
                 if one_metric == "unique-sources":
                     report = dataclasses.replace(report, warnings=[NOT_ADDITIVE_NOTE])
