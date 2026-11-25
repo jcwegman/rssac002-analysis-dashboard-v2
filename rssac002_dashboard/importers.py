@@ -12,6 +12,8 @@ they cover. To add a publisher, add an entry to IMPORTERS below. Each source nee
     short_service  the prefix of its report file names, such as "nl" or "b-root"
     operator       who runs it (optional)
     country        two-letter ISO 3166 code (optional)
+    reports_page   the operator's own page for its RSSAC002 reports, which the Sources page links
+                   to (optional). Not where the dashboard fetches them: that is the location.
 
 If a publisher needs a way of fetching that does not exist yet, write a reader for it in
 sources.py first; the importer then only names that reader's kind.
@@ -25,20 +27,23 @@ from .sources import validate_profile
 from .store import Store
 
 ROOT_REPOSITORY = "https://github.com/rssac-caucus/RSSAC002-data"
+# Operator, country, and the operator's page for its RSSAC002 reports as listed on
+# root-servers.org/rssac002/. Verisign's pages for a and j are drawn by a script: they open in a
+# browser, but answer a plain request with "404 Not Found".
 ROOT_OPERATORS = {
-    "a": ("Verisign", "US"),
-    "b": ("USC Information Sciences Institute", "US"),
-    "c": ("Cogent Communications", "US"),
-    "d": ("University of Maryland", "US"),
-    "e": ("NASA Ames Research Center", "US"),
-    "f": ("Internet Systems Consortium", "US"),
-    "g": ("US Department of Defense (NIC)", "US"),
-    "h": ("US Army Research Lab", "US"),
-    "i": ("Netnod", "SE"),
-    "j": ("Verisign", "US"),
-    "k": ("RIPE NCC", "NL"),
-    "l": ("ICANN", "US"),
-    "m": ("WIDE Project", "JP"),
+    "a": ("Verisign", "US", "https://a.root-servers.org/rssac-metrics/raw"),
+    "b": ("USC Information Sciences Institute", "US", "https://b.root-servers.org/rssac/"),
+    "c": ("Cogent Communications", "US", "https://c.root-servers.org/rssac002-metrics/"),
+    "d": ("University of Maryland", "US", "https://www.droot.maxgigapop.net/rssac002/"),
+    "e": ("NASA Ames Research Center", "US", "https://e.root-servers.org/rssac/"),
+    "f": ("Internet Systems Consortium", "US", "https://rssac-stats.isc.org/rssac002/"),
+    "g": ("US Department of Defense (NIC)", "US", "https://www.disa.mil/G-Root/G-Root-Stats/"),
+    "h": ("US Army Research Lab", "US", "https://h.root-servers.org/rssac.html"),
+    "i": ("Netnod", "SE", "https://www.netnod.se/rssac002-metrics/"),
+    "j": ("Verisign", "US", "https://j.root-servers.org/rssac-metrics/raw"),
+    "k": ("RIPE NCC", "NL", "https://www-static.ripe.net/dynamic/rssac002-metrics/"),
+    "l": ("ICANN", "US", "https://stats.dns.icann.org/rssac/"),
+    "m": ("WIDE Project", "JP", "https://rssac.wide.ad.jp/rssac002-metrics/"),
 }
 
 
@@ -66,6 +71,7 @@ IMPORTERS = {
                     "short_service": "nl",
                     "operator": "SIDN",
                     "country": "NL",
+                    "reports_page": "https://rssac002.sidnlabs.nl/",
                 },
             ),
         ),
@@ -82,8 +88,9 @@ IMPORTERS = {
                     "short_service": f"{letter}-root",
                     "operator": operator,
                     "country": country,
+                    "reports_page": reports_page,
                 }
-                for letter, (operator, country) in ROOT_OPERATORS.items()
+                for letter, (operator, country, reports_page) in ROOT_OPERATORS.items()
             )
             # Last, so that it is computed after the thirteen it adds up have been imported.
             + (
@@ -99,6 +106,16 @@ IMPORTERS = {
         ),
     )
 }
+
+
+def reports_pages() -> dict[tuple[str, str], str]:
+    """The operators' own RSSAC002 pages that are known: (location, short service) -> address."""
+    return {
+        (spec["location"], spec["short_service"]): spec["reports_page"]
+        for importer in IMPORTERS.values()
+        for spec in importer.sources
+        if spec.get("reports_page")
+    }
 
 
 def add_sources(store: Store, importer: Importer, import_from: str = "") -> list[int]:

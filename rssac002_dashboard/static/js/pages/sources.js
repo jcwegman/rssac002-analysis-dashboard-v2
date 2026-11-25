@@ -84,6 +84,7 @@ export const sources = {
           { class: admin ? "open" : "" },
           h("th", { scope: "row" }, source.name),
           h("td", {}, source.operator || h("span", { class: "muted" }, "Not given")),
+          h("td", {}, source.reports_page ? h("a", { href: source.reports_page, rel: "noopener" }, new URL(source.reports_page).hostname.replace(/^www\./, "")) : null),
           h("td", {}, countryName(source.country) || h("span", { class: "muted" }, "Not given")),
           h("td", { class: "num" }, source.reports.toLocaleString("en-GB")),
           h("td", {}, source.reports ? `${formatDay(source.first_day, true)} to ${formatDay(source.last_day, true)}` : h("span", { class: "muted" }, "No reports")),
@@ -101,10 +102,10 @@ export const sources = {
               ),
             ),
         );
-        const extra = admin ? h("tr", {}, h("td", { colSpan: 7 }, h("div", { class: "muted mono" }, source.location), details)) : null;
+        const extra = admin ? h("tr", {}, h("td", { colSpan: 8 }, h("div", { class: "muted mono" }, source.location), details)) : null;
         return [main, extra];
       });
-      const headings = ["Service", "Operator", "Country", "Reports", "Covers", "Status", admin ? "" : null].filter((name) => name !== null);
+      const headings = ["Service", "Operator", "Operator\u2019s RSSAC002 page", "Country", "Reports", "Covers", "Status", admin ? "" : null].filter((name) => name !== null);
       tableHolder.replaceChildren(
         h("div", { class: "card" }, h("table", { class: "data left" }, h("thead", {}, h("tr", {}, headings.map((name) => h("th", { scope: "col", class: name === "Reports" ? "num" : "" }, name)))), h("tbody", {}, rows))),
       );

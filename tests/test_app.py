@@ -311,3 +311,18 @@ def test_unnamed_response_codes_reach_the_page_as_one_series_and_the_csv_in_full
     header = client.get("/api/series.csv", params=params).text.splitlines()[0].split(",")
     assert {"rcode_300", "rcode_4000"} <= set(header)
     assert "rcodes_unnamed" not in client.get("/api/series", params={**params, "to": "2026-05-01"}).json()
+
+
+def test_sources_of_a_known_publisher_link_to_the_operators_own_rssac002_page(client):
+    """Where a known operator presents its reports itself, not where the dashboard fetches them."""
+    from rssac002_dashboard.importers import IMPORTERS, add_sources
+
+    add_sources(client.app.state.store, IMPORTERS["root-servers"])
+    add_sources(client.app.state.store, IMPORTERS["sidn-nl"])
+    pages = {source["name"]: source["reports_page"] for source in client.get("/api/meta").json()["sources"]}
+    assert pages["k.root-servers.net"] == "https://www-static.ripe.net/dynamic/rssac002-metrics/"
+    assert pages["a.root-servers.net"] == "https://a.root-servers.org/rssac-metrics/raw"
+    assert [name for name, page in pages.items() if not page] == ["root-servers.net"]
+    assert sorted(page for page in pages.values() if page.startswith("https://rssac002.sidnlabs.nl")) == [
+        "https://rssac002.sidnlabs.nl/"
+    ]  # the fixture's own .nl folder is not SIDN's repository, so only the importer's .nl links there

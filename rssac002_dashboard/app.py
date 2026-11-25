@@ -29,7 +29,7 @@ from .analytics import (
 )
 from .auth import COOKIE_NAME, REQUEST_HEADER, LoginThrottle, Sessions, verify_password
 from .config import Settings
-from .importers import IMPORTERS, add_sources
+from .importers import IMPORTERS, add_sources, reports_pages
 from .limits import RateLimiter
 from .parsing import METRICS
 from .scanner import ScanInProgress, Scanner
@@ -164,8 +164,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def meta(request: Request):
         admin = is_admin(request)
         sources = store.list_sources()
-        if not admin:
-            for source in sources:
+        pages = reports_pages()
+        for source in sources:
+            source["reports_page"] = pages.get((source["location"], source["short_service"]), "")
+            if not admin:
                 del source["location"]
         return {
             "version": __version__,
