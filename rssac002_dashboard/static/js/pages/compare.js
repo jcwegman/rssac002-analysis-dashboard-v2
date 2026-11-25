@@ -4,7 +4,7 @@
 
 import { api } from "../api.js";
 import { addDays, formatRange, formatValue, h, rollingMean } from "../format.js";
-import { card, field, lineCard, pageHead, select } from "../ui.js";
+import { card, field, lineCard, pageHead, select, serviceCode } from "../ui.js";
 
 const MAX_SERIES = 8;
 const YEAR = 364; // 52 weeks, so weekdays line up
@@ -22,7 +22,8 @@ export function candidates(context) {
   const mode = modeOf(query);
   let all = [];
   if (mode === "service") {
-    all = meta.sources.filter((one) => one.reports).map((one) => ({ key: String(one.id), label: one.name, params: { source: one.id, from: first, to: last } }));
+    // A service is named in the address by its code. `number` is how older links name it.
+    all = meta.sources.filter((one) => one.reports).map((one) => ({ key: serviceCode(one, meta.sources), number: String(one.id), label: one.name, params: { source: one.id, from: first, to: last } }));
   } else if (mode === "ns" && source) {
     all = ["", ...source.servers].map((server) => ({ key: server || "all", label: server || "All nameservers", params: { source: source.id, server, from: first, to: last } }));
   } else if (source) {
@@ -35,7 +36,7 @@ export function candidates(context) {
   // with more, at most eight can be ticked and colours follow the order of the ticked ones.
   const stable = all.length <= MAX_SERIES;
   const asked = (query.get("set") || "").split(",").filter(Boolean);
-  let chosen = mode === "year" ? all : asked.length ? all.filter((one) => asked.includes(one.key)) : all.slice(0, stable ? MAX_SERIES : 6);
+  let chosen = mode === "year" ? all : asked.length ? all.filter((one) => asked.includes(one.key) || asked.includes(one.number)) : all.slice(0, stable ? MAX_SERIES : 6);
   chosen = chosen.slice(0, MAX_SERIES);
   all = all.map((one, index) => ({ color: stable ? index + 1 : chosen.indexOf(one) + 1, ...one }));
   chosen = all.filter((one) => chosen.some((picked) => picked.key === one.key));

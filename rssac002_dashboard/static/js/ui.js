@@ -80,6 +80,20 @@ export function select(options, value, onChange) {
   return element;
 }
 
+/**
+ * How an address names a service: by the prefix of its report files, such as "nl" or "b-root".
+ * That stays the same when sources are added or removed, which a source's number does not.
+ * Two sources can share a prefix (one service fetched from two places); those keep their number.
+ */
+export function serviceCode(source, sources) {
+  return sources.filter((other) => other.short_service === source.short_service).length === 1 ? source.short_service : String(source.id);
+}
+
+/** The service that an address names: by its code, or by the number that older links carry. */
+export function findService(value, sources) {
+  return sources.find((one) => serviceCode(one, sources) === value) || sources.find((one) => String(one.id) === value);
+}
+
 export function countryName(code) {
   if (!code) return "";
   try {

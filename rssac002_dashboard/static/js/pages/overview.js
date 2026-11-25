@@ -3,7 +3,7 @@
 import { api } from "../api.js";
 import { columnChart, downloadText, heatLegend, heatmap, rankedBars, saveHeatmap, sparkline } from "../charts.js";
 import { describe, formatChange, formatDay, formatRange, formatValue, h, rollingMean, toDay } from "../format.js";
-import { card, countryName, lineCard, saveButton, section, slug, tableToggle } from "../ui.js";
+import { card, countryName, lineCard, saveButton, section, serviceCode, slug, tableToggle } from "../ui.js";
 
 const FIGURES = [
   ["queries", "Queries per day", "count"],
@@ -283,13 +283,18 @@ export const overview = {
     const scope = server ? `Nameserver ${server} only. ` : "";
     const coverage = `${formatRange(first, last)} (UTC days), reports for ${summary.days_with_data} of ${summary.days} days.`;
 
-    const reference = `${source.operator || `Operator of ${source.name}`}. RSSAC002 traffic reports for ${scopeName}, ${formatRange(first, last)} (UTC days). Retrieved ${formatDay(toDay(new Date()), true)} from ${window.location.href}`;
+    // The cited address has to show this view later too. So it names the service by its code and
+    // the days by date: a period such as "last 90 days" moves on, and a source's number can change.
+    const lasting = new URLSearchParams({ service: serviceCode(source, meta.sources), ...(server ? { ns: server } : {}), from: first, to: last });
+    for (const [name, value] of query) if (!["service", "ns", "from", "to", "range"].includes(name)) lasting.set(name, value);
+    const address = `${window.location.origin}${window.location.pathname}#/overview?${lasting}`;
+    const reference = `${source.operator || `Operator of ${source.name}`}. RSSAC002 traffic reports for ${scopeName}, ${formatRange(first, last)} (UTC days). Retrieved ${formatDay(toDay(new Date()), true)} from ${address}`;
     const citeBlock = h(
       "div",
       { class: "cite", hidden: true },
       h("p", {}, reference),
       h("button", { class: "button", type: "button", onclick: (event) => navigator.clipboard?.writeText(reference).then(() => (event.target.textContent = "Copied")) }, "Copy"),
-      h("p", { class: "caption" }, "The address reproduces this exact view. Check the operator\u2019s own site for its preferred citation and licence."),
+      h("p", { class: "caption" }, "The address names the service and the days, so it shows this view later too. Check the operator\u2019s own site for its preferred citation and licence."),
     );
     const citeButton = h("button", { class: "button quiet", type: "button", onclick: () => (citeBlock.hidden = !citeBlock.hidden) }, "Cite this view");
 

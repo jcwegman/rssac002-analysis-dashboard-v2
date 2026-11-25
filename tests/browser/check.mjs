@@ -103,6 +103,8 @@ await until(`document.documentElement.dataset.theme === "light" && ${redrawn}`);
 await click("Share of the day");
 check("heatmaps switch to shares", !!(await until(`location.hash.includes("heat=share") && document.querySelector(".heat-legend")?.textContent.includes("share of that day")`)));
 await click("Cite this view");
+const cited = (await js(`document.querySelector(".cite p").textContent`)).split(" from ").at(-1);
+check("the cited address names the service by its code and the days by date", /#\/overview\?service=example&from=\d{4}-\d\d-\d\d&to=\d{4}-\d\d-\d\d/.test(cited) && !cited.includes("range="), cited);
 check("the citation names the operator, period and address", (await js(`document.querySelector(".cite p").textContent`)).includes("Example Registry. RSSAC002 traffic reports for .example") && (await js(`document.querySelector(".cite p").textContent.includes(location.origin)`)));
 const csv = await js(`fetch([...document.querySelectorAll("a.button")].find((one) => one.textContent.includes("CSV")).href).then((response) => response.text())`);
 check("daily values download as CSV", csv.startsWith("day,queries,") && csv.split("\n").length > 20);
@@ -139,6 +141,16 @@ await click("Nameservers");
 check("nameservers compare beside the combined figure", !!(await until(`document.querySelectorAll(".plot svg path.line").length === 4 && document.querySelector(".chip").textContent.includes("All nameservers")`)));
 await click("A year earlier");
 check("a period compares with 52 weeks earlier", !!(await until(`[...document.querySelectorAll(".legend span")].some((one) => one.textContent === "52 weeks earlier")`)));
+
+// --- addresses ----------------------------------------------------------------------------
+await goto("#/overview?service=test&range=30d", `document.querySelector("h1")?.textContent === ".test"`);
+check("an address names a service by its code", (await js(`document.title`)).startsWith(".test: Overview"));
+await goto("#/overview?service=3&range=30d", `document.querySelector("h1")?.textContent === ".invalid"`);
+check("and a link with a source's number still opens it", (await js(`document.title`)).startsWith(".invalid: Overview"));
+await js(`(() => { const one = document.querySelector("#filters select"); one.value = "example"; one.dispatchEvent(new Event("change")); })()`);
+check("choosing a service puts its code in the address", !!(await until(`location.hash.includes("service=example") && document.querySelector("h1")?.textContent === ".example"`)), await js(`location.hash`));
+await goto("#/compare?set=test,3&range=30d", `document.querySelectorAll(".plot svg path.line").length === 2`);
+check("compare takes codes, and numbers from older links", (await js(`[...document.querySelectorAll(".legend span")].map((one) => one.textContent).join(",")`)) === ".invalid,.test", await js(`[...document.querySelectorAll(".legend span")].map((one) => one.textContent).join(",")`));
 
 // --- reports, quality, methods ------------------------------------------------------------
 await goto("#/reports?range=7d", `document.querySelectorAll("table.data tbody tr").length >= 5`);

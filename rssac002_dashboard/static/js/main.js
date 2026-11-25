@@ -1,5 +1,5 @@
 // Page frame: routing, the shared filter row, and theme. Everything a view shows is
-// described by the URL (#/page?service=1&range=30d), so any view can be shared as a link.
+// described by the URL (#/page?service=nl&range=30d), so any view can be shared as a link.
 
 import { api } from "./api.js";
 import { coverageStrip, disposeCharts } from "./charts.js";
@@ -10,7 +10,7 @@ import { quality } from "./pages/quality.js";
 import { overview } from "./pages/overview.js";
 import { reports } from "./pages/reports.js";
 import { sources } from "./pages/sources.js";
-import { field, message, select } from "./ui.js";
+import { field, findService, message, select, serviceCode } from "./ui.js";
 
 const PAGES = { overview, compare, reports, quality, sources, methods };
 // Pages that show stored reports rather than settings or text, and so need reports to exist.
@@ -78,7 +78,7 @@ function resolveSelection(route, query) {
     const firstData = withReports.map((source) => source.first_day).sort()[0] || lastData;
     return { source: null, server: "", ...resolveRange(query, firstData, lastData) };
   }
-  const source = meta.sources.find((one) => String(one.id) === query.get("service")) || withReports[0] || meta.sources[0] || null;
+  const source = findService(query.get("service"), meta.sources) || withReports[0] || meta.sources[0] || null;
   const server = source && source.servers.includes(query.get("ns")) ? query.get("ns") : "";
   const lastData = source?.last_day || today;
   return { source, server, ...resolveRange(query, source?.first_day || lastData, lastData) };
@@ -98,7 +98,7 @@ async function renderFilters(route, selection, token) {
   const go = (changes) => navigate(route, changes);
   const row = h("div", { class: "filter-row" });
   if (selection.source) {
-    row.append(field("Service", select(meta.sources.map((source) => [String(source.id), sourceLabel(source)]), String(selection.source.id), (value) => go({ service: value, ns: null, set: null }))));
+    row.append(field("Service", select(meta.sources.map((source) => [serviceCode(source, meta.sources), sourceLabel(source)]), serviceCode(selection.source, meta.sources), (value) => go({ service: value, ns: null, set: null }))));
     if (selection.source.servers.length && ["overview", "reports"].includes(route)) {
       const servers = [["", "All nameservers"], ...selection.source.servers.map((server) => [server, server])];
       row.append(field("Nameserver", select(servers, selection.server, (value) => go({ ns: value }))));
