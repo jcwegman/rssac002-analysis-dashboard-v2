@@ -452,8 +452,17 @@ export function seriesTable(days, series, unit) {
  * Drag across it to choose a date range; click a day to choose its month.
  * spec: { rows: [{ first, counts, label?, color? }], expected, selected: [first, last], onSelect(first, last), label }
  */
+let stripCount = 0;
+
+/** The path of a rectangle with rounded corners, for use as part of a larger path. */
+function roundedRect(x, y, width, height, radius) {
+  const r = Math.min(radius, width / 2, height / 2);
+  return `M${x + r},${y}h${width - 2 * r}a${r},${r} 0 0 1 ${r},${r}v${height - 2 * r}a${r},${r} 0 0 1 ${-r},${r}h${2 * r - width}a${r},${r} 0 0 1 ${-r},${-r}v${2 * r - height}a${r},${r} 0 0 1 ${r},${-r}z`;
+}
+
 export function coverageStrip(spec) {
   const container = h("div", { class: "strip" });
+  const strip = ++stripCount;
   const rows = spec.rows.filter((row) => row.counts);
   if (!rows.length) return container;
   const DAY = 86400000;
@@ -477,14 +486,18 @@ export function coverageStrip(spec) {
     rows.forEach((row, position) => {
       const top = position * pitch;
       const offset = indexOf(row.first);
-      root.append(s("rect", { class: "strip-track", x: left, y: top, width: plotWidth, height: band, rx: labelled ? 2 : 3 }));
+      // The cells are cut to the rounded shape of their row, so that they do not stick out at its ends.
+      const shape = { x: left, y: top, width: plotWidth, height: band, rx: labelled ? 2 : 3 };
+      const clip = `strip-${strip}-row-${position}`;
+      const cellsOfRow = s("g", { "clip-path": `url(#${clip})` });
+      root.append(s("clipPath", { id: clip }, s("rect", shape)), s("rect", { class: "strip-track", ...shape }), cellsOfRow);
       // Draw runs of equal state as one rectangle each.
       let from = 0;
       for (let index = 1; index <= row.counts.length; index += 1) {
         if (index < row.counts.length && row.counts[index] === row.counts[from]) continue;
         const found = Number(row.counts[from]);
         if (found > 0) {
-          root.append(s("rect", { class: found >= spec.expected ? "strip-full" : "strip-partial", x: x(offset + from), y: top, width: Math.max(x(offset + index) - x(offset + from), 0.6), height: band }));
+          cellsOfRow.append(s("rect", { class: found >= spec.expected ? "strip-full" : "strip-partial", x: x(offset + from), y: top, width: Math.max(x(offset + index) - x(offset + from), 0.6), height: band }));
         }
         from = index;
       }
@@ -504,20 +517,20 @@ export function coverageStrip(spec) {
       root.append(s("text", { class: "tick", x: x(index) + (index === 0 ? 0 : 3), y: height - 6 }, label));
     }
 
+    // Everything outside the selected days is dimmed. The dimming is one shape with a hole the
+    // shape of the selection's outline, so that no undimmed corner shows outside the rounded outline.
     const selection = s("rect", { class: "strip-selection", y: 0.75, height: cells - 1.5, rx: 3 });
-    const dimLeft = s("rect", { class: "strip-dim", x: left, y: 0, height: cells });
-    const dimRight = s("rect", { class: "strip-dim", y: 0, height: cells });
+    const dim = s("path", { class: "strip-dim", "fill-rule": "evenodd" });
     const place = (first, last) => {
       const a = Math.max(0, Math.min(total, first));
       const b = Math.max(0, Math.min(total, last + 1));
-      selection.setAttribute("x", x(a) + 0.75);
-      selection.setAttribute("width", Math.max(x(b) - x(a) - 1.5, 2));
-      dimLeft.setAttribute("width", Math.max(x(a) - left, 0));
-      dimRight.setAttribute("x", x(b));
-      dimRight.setAttribute("width", Math.max(width - x(b), 0));
+      const [from, across] = [x(a) + 0.75, Math.max(x(b) - x(a) - 1.5, 2)];
+      selection.setAttribute("x", from);
+      selection.setAttribute("width", across);
+      dim.setAttribute("d", `M${left},0h${plotWidth}v${cells}h${-plotWidth}z${roundedRect(from, 0.75, across, cells - 1.5, 3)}`);
     };
     place(indexOf(spec.selected[0]), indexOf(spec.selected[1]));
-    root.append(dimLeft, dimRight, selection);
+    root.append(dim, selection);
 
     const at = (event) => Math.max(0, Math.min(total - 1, Math.floor(((event.clientX - root.getBoundingClientRect().left - left) / plotWidth) * total)));
     const rowAt = (event) => rows[Math.max(0, Math.min(rows.length - 1, Math.floor((event.clientY - root.getBoundingClientRect().top) / pitch)))];
