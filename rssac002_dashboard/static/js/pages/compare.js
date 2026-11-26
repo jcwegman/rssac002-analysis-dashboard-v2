@@ -3,7 +3,7 @@
 // Each series keeps its colour whichever others are shown.
 
 import { api } from "../api.js";
-import { addDays, formatRange, formatValue, h, rollingMean } from "../format.js";
+import { addDays, formatRange, formatValue, h, withPartial } from "../format.js";
 import { card, field, lineCard, pageHead, select, serviceCode } from "../ui.js";
 
 const MAX_SERIES = 8;
@@ -66,13 +66,19 @@ export const compare = {
 
     // The current period's days carry every series; the earlier year is drawn against the same axis.
     const days = results[0]?.days || [];
+    // A total of several services also has partial sums, for its days without every member.
+    const nameOf = (short) => meta.sources.find((other) => other.short_service === short)?.name || short;
     const series = chosen.map((one, position) => {
+      const partial = results[position].partial;
       let values = results[position].derived[measure];
+      let partialValues = partial?.derived[measure];
       if (indexed) {
         const base = values.find((value) => value !== null && value !== undefined && value !== 0);
-        values = values.map((value) => (value === null || value === undefined || !base ? null : (value / base) * 100));
+        const index = (value) => (value === null || value === undefined || !base ? null : (value / base) * 100);
+        [values, partialValues] = [values.map(index), partialValues?.map(index)];
       }
-      return { label: one.label, color: one.color, values: smoothed ? rollingMean(values) : values };
+      const notes = partial?.missing[partial.metric[measure]]?.map((members) => members && `${one.label}: partial sum, without ${members.map(nameOf).join(", ")}.`);
+      return { label: one.label, color: one.color, notes, ...withPartial(values, partialValues, smoothed) };
     });
     const shownUnit = indexed ? "index" : unit;
 
@@ -134,7 +140,7 @@ export const compare = {
 
     const summary = card(
       `${label}, ${scope}${formatRange(first, last)}`,
-      "Statistics of the daily values, unsmoothed and not indexed.",
+      "Statistics of the daily values, unsmoothed and not indexed. Partial sums of a total are left out.",
       h(
         "div",
         { class: "table-scroll" },

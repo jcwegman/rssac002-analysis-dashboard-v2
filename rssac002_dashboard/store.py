@@ -3,6 +3,10 @@
 One row per report. The original YAML is kept verbatim so downloads and the republished
 tree return exactly what the operator published; `data` holds the validated, normalised
 values the charts are computed from.
+
+A total of several services can also hold partial sums: rows with `missing` set, for days on
+which not every member had a report (see aggregate.py). They are not reports of the service.
+Everything that reads reports leaves them out, except load_partial, which reads only them.
 """
 
 from __future__ import annotations
@@ -17,7 +21,7 @@ from pathlib import Path
 
 from .parsing import ParsedReport, ReportError, parse_report
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SOURCES_TABLE = """CREATE TABLE IF NOT EXISTS sources (
     id            INTEGER PRIMARY KEY,
@@ -51,6 +55,7 @@ CREATE TABLE IF NOT EXISTS reports (
     origin       TEXT NOT NULL,
     warnings     TEXT NOT NULL DEFAULT '[]',
     fetched_at   TEXT NOT NULL,
+    missing      TEXT NOT NULL DEFAULT '',
     UNIQUE (source_id, server, metric, day)
 );
 CREATE INDEX IF NOT EXISTS reports_by_day ON reports (day, metric);
@@ -108,24 +113,28 @@ class Store:
         services to share one location. SQLite cannot change a table's constraints in place, so
         the table is rebuilt. Foreign keys are off while that happens: with them on, dropping
         the old table would delete every report that refers to it.
+
+        Version 4 added reports.missing, for the partial sums of a total of several services.
         """
         conn = sqlite3.connect(self.path, timeout=30, isolation_level=None)
         try:
             columns = [row[1] for row in conn.execute("PRAGMA table_info(sources)")]
-            if "tld" not in columns:
-                return
-            import_from = "import_from" if "import_from" in columns else "''"
-            conn.execute("PRAGMA foreign_keys = OFF")
-            conn.execute("BEGIN")
-            conn.execute(SOURCES_TABLE.replace("IF NOT EXISTS sources", "sources_upgraded"))
-            conn.execute(
-                "INSERT INTO sources_upgraded (id, name, short_service, operator, country, kind, location, "
-                f"created_at, import_from) SELECT id, tld, short_service, operator, country, kind, location, "
-                f"created_at, {import_from} FROM sources"
-            )
-            conn.execute("DROP TABLE sources")
-            conn.execute("ALTER TABLE sources_upgraded RENAME TO sources")
-            conn.execute("COMMIT")
+            if "tld" in columns:
+                import_from = "import_from" if "import_from" in columns else "''"
+                conn.execute("PRAGMA foreign_keys = OFF")
+                conn.execute("BEGIN")
+                conn.execute(SOURCES_TABLE.replace("IF NOT EXISTS sources", "sources_upgraded"))
+                conn.execute(
+                    "INSERT INTO sources_upgraded (id, name, short_service, operator, country, kind, location, "
+                    f"created_at, import_from) SELECT id, tld, short_service, operator, country, kind, location, "
+                    f"created_at, {import_from} FROM sources"
+                )
+                conn.execute("DROP TABLE sources")
+                conn.execute("ALTER TABLE sources_upgraded RENAME TO sources")
+                conn.execute("COMMIT")
+            columns = [row[1] for row in conn.execute("PRAGMA table_info(reports)")]
+            if columns and "missing" not in columns:
+                conn.execute("ALTER TABLE reports ADD COLUMN missing TEXT NOT NULL DEFAULT ''")
         finally:
             conn.close()
 
@@ -217,7 +226,7 @@ class Store:
             for source in sources:
                 stats = conn.execute(
                     "SELECT MIN(day) AS first_day, MAX(day) AS last_day, COUNT(*) AS reports "
-                    "FROM reports WHERE source_id = ?",
+                    "FROM reports WHERE source_id = ? AND missing = ''",
                     (source["id"],),
                 ).fetchone()
                 source.update(dict(stats))
@@ -238,12 +247,18 @@ class Store:
     # --- reports ---------------------------------------------------------------------
 
     def stored_hashes(self, source_id: int) -> dict[tuple[str, str, str], str]:
+        """What is stored for a source, partial sums included: (server, metric, day) -> hash of the file."""
         with self.connect() as conn:
             rows = conn.execute("SELECT server, metric, day, sha256 FROM reports WHERE source_id = ?", (source_id,))
             return {(row["server"], row["metric"], row["day"]): row["sha256"] for row in rows}
 
-    def save_report(self, source_id: int, server: str, report: ParsedReport, raw: str, origin: str) -> str:
-        """Insert or replace one report. Returns 'imported', 'updated' or 'unchanged'."""
+    def save_report(
+        self, source_id: int, server: str, report: ParsedReport, raw: str, origin: str, missing: tuple[str, ...] = ()
+    ) -> str:
+        """Insert or replace one report. Returns 'imported', 'updated' or 'unchanged'.
+
+        `missing` names the members without a report, when this is a partial sum of a total.
+        """
         digest = hashlib.sha256(raw.encode()).hexdigest()
         key = (source_id, server, report.metric, report.day.isoformat())
         with self.connect() as conn:
@@ -254,11 +269,11 @@ class Store:
                 return "unchanged"
             conn.execute(
                 "INSERT INTO reports (source_id, server, metric, day, start_period, service, version, data, raw, "
-                "sha256, origin, warnings, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "sha256, origin, warnings, fetched_at, missing) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT (source_id, server, metric, day) DO UPDATE SET start_period = excluded.start_period, "
                 "service = excluded.service, version = excluded.version, data = excluded.data, raw = excluded.raw, "
                 "sha256 = excluded.sha256, origin = excluded.origin, warnings = excluded.warnings, "
-                "fetched_at = excluded.fetched_at",
+                "fetched_at = excluded.fetched_at, missing = excluded.missing",
                 (
                     *key,
                     report.start.isoformat(),
@@ -270,6 +285,7 @@ class Store:
                     origin,
                     json.dumps(report.warnings),
                     now(),
+                    ",".join(missing),
                 ),
             )
             return "updated" if existing else "imported"
@@ -279,16 +295,27 @@ class Store:
         with self.connect() as conn:
             rows = conn.execute(
                 "SELECT day, data FROM reports WHERE source_id = ? AND server = ? AND metric = ? "
-                "AND day BETWEEN ? AND ?",
+                "AND day BETWEEN ? AND ? AND missing = ''",
                 (source_id, server, metric, first, last),
             )
             return {row["day"]: json.loads(row["data"]) for row in rows}
+
+    def load_partial(self, source_id: int, metric: str, first: str, last: str) -> dict[str, tuple[dict, list[str]]]:
+        """The partial sums of a total for one metric: per day, the data and the members it is without."""
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT day, data, missing FROM reports WHERE source_id = ? AND server = '' AND metric = ? "
+                "AND day BETWEEN ? AND ? AND missing != ''",
+                (source_id, metric, first, last),
+            )
+            return {row["day"]: (json.loads(row["data"]), row["missing"].split(",")) for row in rows}
 
     def coverage(self, source_id: int, server: str) -> dict[str, list[str]]:
         """Which metrics exist for each day."""
         with self.connect() as conn:
             rows = conn.execute(
-                "SELECT day, metric FROM reports WHERE source_id = ? AND server = ? ORDER BY day", (source_id, server)
+                "SELECT day, metric FROM reports WHERE source_id = ? AND server = ? AND missing = '' ORDER BY day",
+                (source_id, server),
             )
             days: dict[str, list[str]] = {}
             for row in rows:
@@ -306,7 +333,7 @@ class Store:
         with_raw: bool = False,
         limit: int | None = None,
     ) -> list[dict]:
-        clauses, params = [], []
+        clauses, params = ["r.missing = ''"], []
         for column, value in (("r.source_id", source_id), ("r.server", server), ("r.metric", metric)):
             if value is not None:
                 clauses.append(f"{column} = ?")
@@ -317,7 +344,7 @@ class Store:
         if last:
             clauses.append("r.day <= ?")
             params.append(last)
-        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        where = f"WHERE {' AND '.join(clauses)}"
         columns = "r.id, r.source_id, r.server, r.metric, r.day, r.service, r.origin, r.warnings, r.fetched_at, "
         columns += "s.short_service, s.name" + (", r.raw" if with_raw else "")
         sql = f"SELECT {columns} FROM reports r JOIN sources s ON s.id = r.source_id {where} "
@@ -336,7 +363,8 @@ class Store:
     def get_report(self, report_id: int) -> dict | None:
         with self.connect() as conn:
             row = conn.execute(
-                "SELECT r.*, s.short_service FROM reports r JOIN sources s ON s.id = r.source_id WHERE r.id = ?",
+                "SELECT r.*, s.short_service FROM reports r JOIN sources s ON s.id = r.source_id "
+                "WHERE r.id = ? AND r.missing = ''",
                 (report_id,),
             ).fetchone()
         if row is None:
@@ -356,7 +384,8 @@ class Store:
         """Normalised data per day and per server ('' is the combined report), for consistency checks."""
         with self.connect() as conn:
             rows = conn.execute(
-                "SELECT day, server, data FROM reports WHERE source_id = ? AND metric = ? AND day BETWEEN ? AND ?",
+                "SELECT day, server, data FROM reports WHERE source_id = ? AND metric = ? AND day BETWEEN ? AND ? "
+                "AND missing = ''",
                 (source_id, metric, first, last),
             )
             days: dict[str, dict[str, dict]] = {}
@@ -368,7 +397,7 @@ class Store:
         with self.connect() as conn:
             rows = conn.execute(
                 "SELECT day, metric, server, warnings FROM reports WHERE source_id = ? AND day BETWEEN ? AND ? "
-                "AND warnings != '[]' ORDER BY day DESC, metric, server",
+                "AND warnings != '[]' AND missing = '' ORDER BY day DESC, metric, server",
                 (source_id, first, last),
             )
             return [{**dict(row), "warnings": json.loads(row["warnings"])} for row in rows]

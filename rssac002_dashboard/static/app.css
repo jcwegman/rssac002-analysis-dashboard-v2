@@ -238,6 +238,8 @@ select, input[type="date"], input[type="text"], input[type="url"], input[type="p
 .plot .axis { stroke: var(--axis); stroke-width: 1; }
 .tick { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .plot .line { fill: none; stroke: var(--c); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.plot .line.partial { stroke-dasharray: 2 5; }
+.plot .partial-band { fill: var(--ink-2); fill-opacity: 0.08; }
 .plot .dot { fill: var(--c); }
 .plot .dot.ring { stroke: var(--surface); stroke-width: 2; }
 .plot .bar { fill: var(--c); }
@@ -397,6 +399,7 @@ table.data.wrap td, table.data.wrap th { vertical-align: top; }
 .plot .event-mark { fill: var(--ink-2); }
 .events { margin-top: 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 18px; }
 .events h2 { font-size: 14px; font-weight: 650; }
+.events p { margin-top: 6px; color: var(--ink-2); max-width: 100ch; }
 .events ul { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; color: var(--ink-2); }
 .events li b { color: var(--ink); font-weight: 600; display: inline-block; min-width: 8em; }
 .cite { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 18px; margin-bottom: 16px; display: grid; gap: 8px; justify-items: start; }

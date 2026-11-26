@@ -185,10 +185,40 @@ def _summarise(columns: dict[str, list], window: slice, minimum_days: int = 1) -
     }
 
 
+def _partial_sums(store: Store, source_id: int, days: list[str]) -> tuple[dict, dict, dict, dict]:
+    """The partial sums of a total of several services, see aggregate.py.
+
+    Returns, each with a value per day: the members without a report per metric, the same
+    columns as the series, and the response-code counts. And for each column, its metric.
+    """
+    missing: dict[str, list] = {}
+    columns: dict[str, list] = {}
+    codes: dict[str, dict] = {}
+    metric_of: dict[str, str] = {}
+    for metric, compute in (("traffic-volume", _traffic), ("rcode-volume", _rcodes), ("traffic-sizes", _sizes)):
+        found = store.load_partial(source_id, metric, days[0], days[-1])
+        if not found:
+            continue
+        missing[metric] = [found[day][1] if day in found else None for day in days]
+        for index, day in enumerate(days):
+            if day in found:
+                for name, value in compute(found[day][0]).items():
+                    columns.setdefault(name, [None] * len(days))[index] = value
+                    metric_of[name] = metric
+        if metric == "rcode-volume":
+            codes = {day: data["rcodes"] for day, (data, _) in found.items()}
+    return missing, columns, codes, metric_of
+
+
 def build_series(
     store: Store, source_id: int, server: str, first: dt.date, last: dt.date, derived_only: bool = False
 ) -> dict:
-    """Everything the dashboard needs for one source (and optionally one nameserver) over a date range."""
+    """Everything the dashboard needs for one source (and optionally one nameserver) over a date range.
+
+    For a total of several services, days on which not every member reported are gaps in the
+    series, the summary and the totals over the period. Their partial sums are given apart,
+    under "partial", so that a chart can draw them without any figure being computed from them.
+    """
     span = (last - first).days + 1
     history = span  # the same number of earlier days, for the previous-period comparison
     load_first = first - dt.timedelta(days=history)
@@ -223,6 +253,17 @@ def build_series(
         "days": days[current],
         "derived": {name: columns[name][current] for name in MEASURES},
     }
+    missing, partial, partial_codes, metric_of = (
+        ({}, {}, {}, {}) if server else _partial_sums(store, source_id, days[current])
+    )
+    if missing:
+        # "missing" has, per metric, the members without a report on each day; "metric" says which
+        # of those applies to each series.
+        result["partial"] = {
+            "missing": missing,
+            "metric": metric_of,
+            "derived": {name: partial[name] for name in MEASURES if name in partial},
+        }
     if derived_only:
         return result
 
@@ -231,6 +272,8 @@ def build_series(
         f"{p}_{side}_{q}" for p in ("udp", "tcp") for side in ("request", "response") for q in ("p50", "p95")
     ]
     result["series"] = {name: columns.get(name, [None] * len(days))[current] for name in (*extra, *percentiles)}
+    if missing:
+        result["partial"]["series"] = {name: partial[name] for name in (*extra, *percentiles) if name in partial}
     result["summary"] = {
         "current": _summarise(columns, current),
         "previous": _summarise(columns, slice(history - span, history), math.ceil(MIN_PREVIOUS_COVERAGE * span)),
@@ -263,10 +306,16 @@ def build_series(
         for code, count in sorted(rcode_totals.items(), key=lambda item: -item[1])
     ]
     # Responses per code per day. A code absent from a day's report is zero that day.
+    codes = sorted({*rcode_totals, *(int(code) for counts in partial_codes.values() for code in counts)})
     result["rcodes"] = {
         str(code): [rcodes[day]["rcodes"].get(str(code), 0) if day in rcodes else None for day in days[current]]
-        for code in sorted(rcode_totals)
+        for code in codes
     }
+    if missing:
+        result["partial"]["rcodes"] = {
+            str(code): [partial_codes[day].get(str(code), 0) if day in partial_codes else None for day in days[current]]
+            for code in codes
+        }
     return result
 
 
@@ -280,15 +329,24 @@ def with_unnamed_rcodes_summed(data: dict) -> dict:
     unnamed = [code for code in data.get("rcodes", ()) if int(code) not in RCODE_NAMES]
     if not unnamed:
         return data
-    per_day = zip(*(data["rcodes"][code] for code in unnamed), strict=True)
-    return {
+
+    def named(rcodes: dict) -> dict:
+        return {code: values for code, values in rcodes.items() if code not in unnamed}
+
+    def summed(rcodes: dict) -> list:
+        per_day = zip(*(rcodes[code] for code in unnamed), strict=True)
+        return [None if counts[0] is None else sum(counts) for counts in per_day]
+
+    result = {
         **data,
-        "rcodes": {code: values for code, values in data["rcodes"].items() if code not in unnamed},
-        "rcodes_unnamed": {
-            "codes": [int(code) for code in unnamed],
-            "values": [None if counts[0] is None else sum(counts) for counts in per_day],
-        },
+        "rcodes": named(data["rcodes"]),
+        "rcodes_unnamed": {"codes": [int(code) for code in unnamed], "values": summed(data["rcodes"])},
     }
+    # The partial sums of a total have the same codes, see build_series.
+    if "rcodes" in data.get("partial", ()):
+        partial = data["partial"]
+        result["partial"] = {**partial, "rcodes": named(partial["rcodes"]), "rcodes_unnamed": summed(partial["rcodes"])}
+    return result
 
 
 def build_size_matrix(store: Store, source_id: int, server: str, first: dt.date, last: dt.date) -> dict:
@@ -320,15 +378,30 @@ def build_size_matrix(store: Store, source_id: int, server: str, first: dt.date,
 
 
 def series_csv(data: dict) -> str:
-    """The daily series as CSV: one row per day, one column per measure. Missing values are empty."""
+    """The daily series as CSV: one row per day, one column per measure. Missing values are empty.
+
+    A total with partial sums has them in columns of their own, named partial_ and the measure,
+    after a column per metric that names the members without a report (missing_ and the metric).
+    """
     columns = {
         **data["derived"],
         **data["series"],
         **{f"rcode_{code}": values for code, values in data["rcodes"].items()},
     }
+    partial = data.get("partial")
+    if partial:
+        for metric, members in partial["missing"].items():
+            columns[f"missing_{metric.replace('-', '_')}"] = [one and " ".join(one) for one in members]
+        for name, values in {**partial["derived"], **partial["series"]}.items():
+            columns[f"partial_{name}"] = values
+        for code, values in partial["rcodes"].items():
+            columns[f"partial_rcode_{code}"] = values
     lines = [",".join(["day", *columns])]
     for index, day in enumerate(data["days"]):
-        cells = ("" if values[index] is None else repr(values[index]) for values in columns.values())
+        cells = (
+            "" if values[index] is None else values[index] if isinstance(values[index], str) else repr(values[index])
+            for values in columns.values()
+        )
         lines.append(",".join([day, *cells]))
     return "\n".join(lines) + "\n"
 
@@ -468,7 +541,22 @@ def build_quality(store: Store, source_id: int, servers: list[str], first: dt.da
     ]
     missing = {metric: [day for day in days if "" not in reports.get(day, {})] for metric, reports in by_metric.items()}
     notes = store.reports_with_notes(source_id, days[0], days[-1])
+    # For a total of several services: the runs of days on which the same members had no report.
+    without: dict[str, dict[str, list[str]]] = {}
+    for metric in SIZE_METRICS:
+        for day, (_, members) in store.load_partial(source_id, metric, days[0], days[-1]).items():
+            without.setdefault(day, {})[metric] = members
+    runs: list[dict] = []
+    for day in days:
+        if day not in without:
+            continue
+        follows = runs and runs[-1]["metrics"] == without[day] and days.index(day) == days.index(runs[-1]["last"]) + 1
+        if follows:
+            runs[-1]["last"] = day
+        else:
+            runs.append({"first": day, "last": day, "metrics": without[day]})
     return {
+        "partial": {"days": len(without), "runs": runs[::-1][:60]},
         "days": len(days),
         "complete_days": sum(1 for day in days if all("" in reports.get(day, {}) for reports in by_metric.values())),
         "missing": {metric: {"count": len(found), "days": found[:60]} for metric, found in missing.items()},

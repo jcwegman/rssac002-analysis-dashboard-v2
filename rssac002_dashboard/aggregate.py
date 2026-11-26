@@ -3,7 +3,11 @@
 Used for "all root servers together". The rules that make the result a proper total:
 
 - A day is only given when every member has a report for that metric. A sum over fewer
-  members would not be the total, and would look like a traffic drop. Such days stay gaps.
+  members would not be the total, and would look like a traffic drop.
+- Such a day is kept as a partial sum instead, marked with the members it is without, when at
+  least three quarters of the members have a report. The dashboard draws partial sums apart
+  from the total and leaves them out of every figure, statistic, check and download. With
+  fewer members the day stays a gap: the sum would say little about the total.
 - Counts are added: queries and responses, responses per code, messages per size step.
 - TLS and QUIC are not part of RSSAC002, and only some members report them. Their counts are
   added up over the members that do. Their size histograms are only given for a day on which
@@ -22,6 +26,7 @@ from __future__ import annotations
 
 import dataclasses
 import datetime as dt
+import math
 
 import yaml
 
@@ -39,6 +44,8 @@ from .store import Store, now
 
 PREFIX = "aggregate:"
 ADDITIVE = ("traffic-volume", "rcode-volume", "traffic-sizes")
+# A day without every member is given as a partial sum when at least this share of them reported.
+MIN_PARTIAL_SHARE = 0.75
 NOT_ADDITIVE_NOTE = "unique sources cannot be added up across services, so the aggregate gives none"
 
 
@@ -104,10 +111,20 @@ def combine(metric: str, reports: list[dict], prefix: str = "", sized: list[str]
     return dict.fromkeys(UNIQUE_SOURCES_FIELDS)
 
 
-def render(service: str, metric: str, day: str, body: dict, members: list[str], extra: dict | None = None) -> str:
+def render(
+    service: str,
+    metric: str,
+    day: str,
+    body: dict,
+    members: list[str],
+    extra: dict | None = None,
+    missing: tuple[str, ...] = (),
+) -> str:
     """The aggregate report as YAML, marked as computed.
 
-    `extra` names, per TLS or QUIC transport in the body, the members its counts come from.
+    `members` are the services added up. `extra` names, per TLS or QUIC transport in the body,
+    the members its counts come from. `missing` names the members without a report that day,
+    which makes this a partial sum.
     """
     document = {
         "version": "rssac002v5",
@@ -124,6 +141,11 @@ def render(service: str, metric: str, day: str, body: dict, members: list[str], 
         )
     else:
         header += f"# The sum of the {metric} reports of {len(members)} services for this day: {', '.join(members)}.\n"
+    if missing:
+        header += (
+            f"# A partial sum, not the total of {service}: {len(missing)} of its {len(members) + len(missing)} "
+            f"services had no {metric} report for this day: {', '.join(missing)}.\n"
+        )
     for transport, reporters in (extra or {}).items():
         if not reporters:
             continue
@@ -155,39 +177,52 @@ def run(store: Store, source: dict, scan_id: int) -> dict:
         metric: [store.load_metric(by_prefix[member]["id"], "", metric, first, last) for member in members]
         for metric in ADDITIVE
     }
+    partial = dict.fromkeys(ADDITIVE, 0)
+    needed = math.ceil(MIN_PARTIAL_SHARE * len(members))
     for metric in ADDITIVE:
         per_member = loaded[metric]
         for day in sorted(set().union(*per_member)):
             counters["found"] += 1
-            reports = [reports_by_day.get(day) for reports_by_day in per_member]
-            if any(report is None for report in reports):
+            have = [position for position, by_day in enumerate(per_member) if day in by_day]
+            missing = tuple(member for position, member in enumerate(members) if position not in have)
+            if missing:
                 incomplete[metric] += 1
-                continue
+                if len(have) < needed:
+                    continue
+                partial[metric] += 1
+            present = [members[position] for position in have]
+            reports = [per_member[position][day] for position in have]
             sized = []
             if metric == "traffic-sizes":
-                sized = sized_transports(reports, [by_day.get(day) for by_day in loaded["traffic-volume"]])
+                sized = sized_transports(reports, [loaded["traffic-volume"][position].get(day) for position in have])
             # The members that the TLS and QUIC numbers of this report come from, for its header.
             shown = EXTRA_TRANSPORTS if metric == "traffic-volume" else sized
-            extra = {one: [members[position] for position in reporting(one, reports)] for one in shown}
+            extra = {one: [present[position] for position in reporting(one, reports)] for one in shown}
             keys = [(metric, day)]
-            if metric == "traffic-volume":  # a day with a total also gets the empty unique-sources report
+            # A day with a total also gets the empty unique-sources report.
+            if metric == "traffic-volume" and not missing:
                 keys.append(("unique-sources", day))
                 counters["found"] += 1
             for one_metric, one_day in keys:
                 body = combine(one_metric, reports, source["short_service"], sized)
-                raw = render(source["name"], one_metric, one_day, body, members, extra if one_metric == metric else {})
+                own = extra if one_metric == metric else {}
+                raw = render(source["name"], one_metric, one_day, body, present, own, missing)
                 report = parse_report(raw, expected_metric=one_metric)
                 if one_metric == "unique-sources":
                     report = dataclasses.replace(report, warnings=[NOT_ADDITIVE_NOTE])
-                counters[store.save_report(source["id"], "", report, raw, source["location"])] += 1
+                counters[store.save_report(source["id"], "", report, raw, source["location"], missing)] += 1
                 produced.add((one_metric, one_day))
     # A day that no longer has every member (a member's report was withdrawn) loses its total.
     for metric, day in stored - produced:
         store.delete_report(source["id"], "", metric, day)
 
-    left_out = [f"{metric} on {count} days" for metric, count in incomplete.items() if count]
+    left_out = [f"{metric} on {incomplete[metric] - partial[metric]} days" for metric in ADDITIVE]
+    left_out = [text for text in left_out if " on 0 days" not in text]
+    kept = [f"{metric} on {count} days" for metric, count in partial.items() if count]
     message = f"Added up {len(members)} services."
     if left_out:
         message += f" Left out, because not every service had a report: {'; '.join(left_out)}."
+    if kept:
+        message += f" Given as a partial sum, because some services had no report: {'; '.join(kept)}."
     store.update_scan(scan_id, status="done", finished_at=now(), message=message, **counters)
     return counters

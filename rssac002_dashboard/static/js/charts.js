@@ -160,17 +160,24 @@ function dayTicks(days, x) {
 
 // --- line chart --------------------------------------------------------------------
 
+const present = (value) => value !== null && value !== undefined;
+
 /**
  * A line per series over days.
- * spec: { days, series: [{ label, color, values }], unit, label, scale?: "log", events?: [{ day, label }] }
+ * spec: { days, series: [{ label, color, values, partial?, notes? }], unit, label, scale?: "log", events?: [{ day, label }] }
+ *
+ * `partial` holds values for days on which `values` has none because the number is incomplete: the
+ * sum of a total without every member. They are drawn dashed over a shaded band, joined to the
+ * line beside them. `notes` has a sentence per day for the readout, such as which members are missing.
  */
 export function lineChart(spec) {
   const { days, series, unit } = spec;
   const container = h("div", { class: "plot" });
   const log = spec.scale === "log";
   // Zero has no place on a log axis, so zeros are drawn as gaps there (the readout still says 0).
-  const drawn = log ? series.map((one) => ({ ...one, values: one.values.map((value) => (value > 0 ? value : null)) })) : series;
-  const scale = (log ? logScale : valueScale)(drawn.flatMap((one) => one.values));
+  const placed = (values) => (log && values ? values.map((value) => (value > 0 ? value : null)) : values);
+  const drawn = series.map((one) => ({ ...one, values: placed(one.values), partial: placed(one.partial) }));
+  const scale = (log ? logScale : valueScale)(drawn.flatMap((one) => [...one.values, ...(one.partial || [])]));
   if (!scale) {
     container.append(h("p", { class: "empty" }, "No values to show for this period."));
     return container;
@@ -208,18 +215,35 @@ export function lineChart(spec) {
       root.append(s("text", { class: "tick", x: x(tick.index), y: height - 8, "text-anchor": "middle" }, tick.label));
     }
 
+    // A band behind every run of days on which a series has a partial value.
+    const half = count === 1 ? plotWidth / 2 : plotWidth / (count - 1) / 2;
+    for (let index = 0; index < count; index += 1) {
+      if (!drawn.some((one) => present(one.partial?.[index]))) continue;
+      let end = index;
+      while (end + 1 < count && drawn.some((one) => present(one.partial?.[end + 1]))) end += 1;
+      const left = Math.max(margin.left, x(index) - half);
+      root.append(s("rect", { class: "partial-band", x: left, y: margin.top, width: Math.min(width - margin.right, x(end) + half) - left, height: plotHeight }));
+      index = end;
+    }
+
+    const trace = (group, values, lineClass) => {
+      let path = "";
+      values.forEach((value, index) => {
+        if (!present(value)) return;
+        const alone = !present(values[index - 1]) && !present(values[index + 1]);
+        if (alone) group.append(s("circle", { class: "dot", cx: x(index), cy: y(value), r: 2.5 }));
+        path += `${present(values[index - 1]) ? "L" : "M"}${x(index).toFixed(1)},${y(value).toFixed(1)}`;
+      });
+      group.prepend(s("path", { class: lineClass, d: path }));
+    };
     drawn.forEach((one) => {
       const group = s("g", { class: `c${one.color}` });
-      let path = "";
-      one.values.forEach((value, index) => {
-        if (value === null || value === undefined) return;
-        const before = one.values[index - 1];
-        const after = one.values[index + 1];
-        const alone = (before === null || before === undefined) && (after === null || after === undefined);
-        if (alone) group.append(s("circle", { class: "dot", cx: x(index), cy: y(value), r: 2.5 }));
-        path += `${before === null || before === undefined ? "M" : "L"}${x(index).toFixed(1)},${y(value).toFixed(1)}`;
-      });
-      group.prepend(s("path", { class: "line", d: path }));
+      trace(group, one.values, "line");
+      if (one.partial?.some(present)) {
+        // The dashed line starts and ends on the solid line's values beside it, so the two join.
+        const beside = (index) => present(one.partial[index - 1]) || present(one.partial[index + 1]);
+        trace(group, one.partial.map((value, index) => (present(value) ? value : beside(index) ? one.values[index] : null)), "line partial");
+      }
       root.append(group);
     });
 
@@ -251,17 +275,20 @@ export function lineChart(spec) {
       cross.setAttribute("x2", x(index));
       cross.setAttribute("visibility", "visible");
       const rows = [h("div", { class: "tip-title" }, formatDayLong(days[index]))];
+      const notes = new Set();
       series.forEach((one, i) => {
-        const value = one.values[index];
-        const placed = drawn[i].values[index];
-        const visible = placed !== null && placed !== undefined;
-        dots[i].setAttribute("visibility", visible ? "visible" : "hidden");
-        if (visible) {
+        const partial = !present(one.values[index]) && present(one.partial?.[index]);
+        const value = partial ? one.partial[index] : one.values[index];
+        const at = partial ? drawn[i].partial[index] : drawn[i].values[index];
+        if (partial && one.notes?.[index]) notes.add(one.notes[index]);
+        dots[i].setAttribute("visibility", present(at) ? "visible" : "hidden");
+        if (present(at)) {
           dots[i].setAttribute("cx", x(index));
-          dots[i].setAttribute("cy", y(placed));
+          dots[i].setAttribute("cy", y(at));
         }
-        rows.push(tipRow(`c${one.color}`, formatValue(value, unit, true), one.label));
+        rows.push(tipRow(`c${one.color}`, formatValue(value, unit, true), partial ? `${one.label} (partial)` : one.label));
       });
+      for (const note of notes) rows.push(h("div", { class: "tip-note" }, note));
       for (const label of eventsByDay.get(days[index]) || []) rows.push(h("div", { class: "tip-note" }, `Event: ${label}`));
       const box = root.getBoundingClientRect();
       showTip(rows, clientX ?? box.left + x(index), clientY ?? box.top + margin.top + 20);
@@ -434,13 +461,19 @@ export function sparkline(values) {
   return root;
 }
 
-/** A table with the same numbers as a chart: one row per day, newest first. */
+/**
+ * A table with the same numbers as a chart: one row per day, newest first. A partial value (see
+ * lineChart) is marked as such, and a last column then gives the notes of that day.
+ */
 export function seriesTable(days, series, unit) {
-  const rows = days.map((day, index) => h("tr", {}, h("th", { scope: "row" }, formatDay(day, true)), series.map((one) => h("td", {}, formatValue(one.values[index], unit, true)))));
+  const partial = (one, index) => !present(one.values[index]) && present(one.partial?.[index]);
+  const noted = series.some((one) => one.partial?.some(present));
+  const cell = (one, index) => (partial(one, index) ? `${formatValue(one.partial[index], unit, true)} (partial)` : formatValue(one.values[index], unit, true));
+  const rows = days.map((day, index) => h("tr", {}, h("th", { scope: "row" }, formatDay(day, true)), series.map((one) => h("td", {}, cell(one, index))), noted && h("td", {}, [...new Set(series.filter((one) => partial(one, index)).map((one) => one.notes?.[index]))].filter(Boolean).join(" "))));
   return h(
     "div",
     { class: "table-scroll" },
-    h("table", { class: "data" }, h("thead", {}, h("tr", {}, h("th", { scope: "col" }, "Day"), series.map((one) => h("th", { scope: "col" }, one.label)))), h("tbody", {}, rows.reverse())),
+    h("table", { class: "data" }, h("thead", {}, h("tr", {}, h("th", { scope: "col" }, "Day"), series.map((one) => h("th", { scope: "col" }, one.label)), noted && h("th", { scope: "col" }, "Partial sum"))), h("tbody", {}, rows.reverse())),
   );
 }
 
@@ -671,7 +704,7 @@ export function heatLegend(min, max, unit = "count") {
 
 // --- figure export -----------------------------------------------------------------
 
-const EXPORT_STYLES = ["fill", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin", "font-family", "font-size", "font-weight", "text-anchor"];
+const EXPORT_STYLES = ["fill", "fill-opacity", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin", "stroke-dasharray", "font-family", "font-size", "font-weight", "text-anchor"];
 
 /** A copy of a chart's SVG that carries its colours and fonts as attributes, so it renders the same outside the page. */
 function styledCopy(source) {

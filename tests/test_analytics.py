@@ -2,7 +2,14 @@ import datetime as dt
 
 import pytest
 
-from rssac002_dashboard.analytics import build_quality, build_series, build_size_matrix, percentile, series_csv
+from rssac002_dashboard.analytics import (
+    build_quality,
+    build_series,
+    build_size_matrix,
+    percentile,
+    series_csv,
+    with_unnamed_rcodes_summed,
+)
 from rssac002_dashboard.scanner import run_scan
 
 
@@ -211,3 +218,16 @@ def test_tls_sizes_that_do_not_add_up_are_found(store, source, tree):
     quality = build_quality(store, source["id"], [], day, day)
     check = next(check for check in quality["checks"] if check["name"] == "Size histograms account for the queries")
     assert check["examples"][0]["expected"] == 1240 and check["examples"][0]["actual"] == 1100
+
+
+def test_unnamed_response_codes_are_summed_for_the_partial_sums_of_a_total_too():
+    data = {
+        "rcodes": {"0": [5, None], "300": [1, None], "4000": [2, None]},
+        "partial": {"missing": {}, "rcodes": {"0": [None, 4], "300": [None, 1], "4000": [None, 0]}},
+    }
+    page = with_unnamed_rcodes_summed(data)
+    assert page["rcodes"] == {"0": [5, None]}
+    assert page["rcodes_unnamed"] == {"codes": [300, 4000], "values": [3, None]}
+    assert page["partial"]["rcodes"] == {"0": [None, 4]}
+    assert page["partial"]["rcodes_unnamed"] == [None, 1]
+    assert data["partial"]["rcodes"].keys() == {"0", "300", "4000"}  # the CSV still gets a column per code

@@ -60,6 +60,20 @@ export function rollingMean(values, window = 7) {
   });
 }
 
+/**
+ * A series for a line chart: its values and, when it has any, its partial values (the sum of a
+ * total on a day without every member, see lineChart in charts.js).
+ * Smoothed, a mean is partial as soon as one of its seven days is: such a mean is drawn dashed.
+ */
+export function withPartial(values, partial, smoothed) {
+  const has = (value) => value !== null && value !== undefined;
+  if (!partial?.some(has)) return { values: smoothed ? rollingMean(values) : values };
+  if (!smoothed) return { values, partial };
+  const mean = rollingMean(values.map((value, index) => (has(value) ? value : partial[index])));
+  const mixed = values.map((_, index) => partial.slice(Math.max(0, index - 6), index + 1).some(has));
+  return { values: mean.map((value, index) => (mixed[index] ? null : value)), partial: mean.map((value, index) => (mixed[index] ? value : null)) };
+}
+
 /** Descriptive statistics of the values that are present, or null when there are none. */
 export function describe(values) {
   const present = values.filter((value) => value !== null && value !== undefined).sort((a, b) => a - b);
