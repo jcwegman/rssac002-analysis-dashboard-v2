@@ -464,7 +464,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         with store.connect() as conn:
 
             def distinct(expression: str, where: str = "1", params: tuple = ()) -> list[str]:
-                sql = f"SELECT DISTINCT {expression} FROM reports WHERE {where} ORDER BY 1"
+                sql = f"SELECT DISTINCT {expression} FROM reports WHERE missing = '' AND {where} ORDER BY 1"
                 return [row[0] for row in conn.execute(sql, params)]
 
             if len(parts) == 0:

@@ -2,7 +2,7 @@
 
 import { api } from "../api.js";
 import { columnChart, downloadText, heatLegend, heatmap, rankedBars, saveHeatmap, sparkline } from "../charts.js";
-import { describe, formatChange, formatDay, formatRange, formatValue, h, rollingMean, toDay } from "../format.js";
+import { describe, formatChange, formatDay, formatRange, formatValue, h, toDay, withPartial } from "../format.js";
 import { card, countryName, lineCard, saveButton, section, serviceCode, slug, tableToggle } from "../ui.js";
 
 const FIGURES = [
@@ -89,16 +89,17 @@ function otherCodesLabel(codes) {
 /**
  * One line per named response code that occurs, plus the sum of all other codes.
  * `unnamed` is what the server has already added up: { codes, values }, for codes without a name.
+ * `partial` has the same, as `rcodes` and `rcodes_unnamed`, for the days of a total without
+ * every member, or is undefined.
  */
-function rcodeSeries(rcodes, unnamed, prepare) {
+function rcodeSeries(rcodes, unnamed, partial, line) {
   const named = new Set(NAMED_RCODES.map(([code]) => code));
-  const series = NAMED_RCODES.filter(([code]) => rcodes[code]).map(([code, label, color]) => ({ label: code === "-1" ? label : `${label} (${code})`, color, values: prepare(rcodes[code]) }));
+  const series = NAMED_RCODES.filter(([code]) => rcodes[code]).map(([code, label, color]) => line(code === "-1" ? label : `${label} (${code})`, color, rcodes[code], partial?.rcodes[code]));
   const listed = Object.keys(rcodes).filter((code) => !named.has(code));
   const others = [...listed.map(Number), ...(unnamed?.codes || [])].sort((a, b) => a - b);
   if (others.length) {
-    const first = listed.length ? rcodes[listed[0]] : unnamed.values;
-    const sum = first.map((value, day) => (value === null ? null : listed.reduce((total, code) => total + rcodes[code][day], unnamed ? unnamed.values[day] : 0)));
-    series.push({ label: otherCodesLabel(others), color: 0, values: prepare(sum) });
+    const sum = (codes, rest) => (listed.length ? codes[listed[0]] : rest).map((value, day) => (value === null ? null : listed.reduce((total, code) => total + codes[code][day], rest ? rest[day] : 0)));
+    series.push(line(otherCodesLabel(others), 0, sum(rcodes, unnamed?.values), partial && sum(partial.rcodes, partial.rcodes_unnamed)));
   }
   return series;
 }
@@ -267,8 +268,17 @@ export const overview = {
     const { days, derived, series, summary } = data;
     const smoothed = query.get("avg") === "7";
     const scale = query.get("scale") === "log" ? "log" : undefined;
-    const prepare = (values) => (smoothed ? rollingMean(values) : values);
-    const line = (label, color, values) => ({ label, color, values: prepare(values) });
+    // A total of several services has partial sums for days without every member. Each series
+    // is looked up here by its values, to find its partial values and who is missing on a day.
+    const partial = data.partial;
+    const nameOf = (short) => meta.sources.find((one) => one.short_service === short)?.name || short;
+    const notesOf = (metric) => partial?.missing[metric]?.map((members) => members && `Partial sum: without ${members.map(nameOf).join(", ")}.`);
+    const partialOf = new Map();
+    for (const group of ["derived", "series"]) {
+      for (const [name, values] of Object.entries(partial?.[group] || {})) partialOf.set(data[group][name], { values, notes: notesOf(partial.metric[name]) });
+    }
+    const line = (label, color, values, partialValues = partialOf.get(values)?.values, notes = partialOf.get(values)?.notes) => ({ label, color, notes, ...withPartial(values, partialValues, smoothed) });
+    const partialDays = new Set(Object.values(partial?.missing || {}).flatMap((members) => members.flatMap((one, index) => (one ? [index] : [])))).size;
     const quantile = query.get("size") === "p95" ? "p95" : "p50";
     const quantileName = quantile === "p95" ? "95th percentile" : "Median";
     const scopeName = server ? `${source.name} ${server}` : source.name;
@@ -336,6 +346,14 @@ export const overview = {
       h("div", { class: "zone" }, h("h1", {}, source.name), h("p", {}, who ? `${who}. ` : "", scope, coverage), citeButton),
       citeBlock,
       figures(data, summary.days),
+      partialDays
+        ? h(
+            "section",
+            { class: "events" },
+            h("h2", {}, `Reports from some services are missing on ${partialDays} ${partialDays === 1 ? "day" : "days"} in this period`),
+            h("p", {}, "On those days the charts show the sum of the services that did report, as a dotted line over a shaded band. It is lower than the total would be. Point at a day to see which services are missing. These days are left out of the figures above, the statistics and the totals over the period. The ", h("a", { href: "#/quality" }, "Data quality"), " page lists them."),
+          )
+        : null,
       events.length ? h("section", { class: "events" }, h("h2", {}, "Recorded events in this period"), h("ul", {}, events.map((event) => h("li", {}, h("b", {}, formatDay(event.day, true)), event.label)))) : null,
 
       section(
@@ -376,7 +394,7 @@ export const overview = {
             axis: "Responses per UTC day",
             span: 12,
             height: 320,
-            series: rcodeSeries(data.rcodes, data.rcodes_unnamed, prepare),
+            series: rcodeSeries(data.rcodes, data.rcodes_unnamed, partial, (label, color, values, partialValues) => line(label, color, values, partialValues, notesOf("rcode-volume"))),
           }),
           lineCard({ ...base, title: "NOERROR and NXDOMAIN shares", note: "NXDOMAIN: the queried name does not exist in the zone.", unit: "share", axis: "Share of all counted exchanges", series: [line("NXDOMAIN (3)", 2, derived.nxdomain_share), line("NOERROR (0)", 1, derived.noerror_share)] }),
           Object.assign(responseCodes(data), { className: "card span-6" }),

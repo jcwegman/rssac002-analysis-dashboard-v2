@@ -51,9 +51,11 @@ export const slug = (text) => text.toLowerCase().replace(/[^a-z0-9]+/g, "-").rep
  * A line chart in a card, with legend (for two or more series), a caption that states the
  * axis, scale and smoothing, a table view and a figure download.
  * `axis` says what the vertical axis measures; `context` names the service and period for the saved figure.
+ * A series can carry partial values, which the caption then explains (see lineChart).
  */
 export function lineCard({ title, note, days, series, unit, scale, axis, smoothed, events, context = "", span = 6, height }) {
-  const caption = [axis, scale === "log" && "logarithmic axis", smoothed && "7-day trailing mean"].filter(Boolean).join(", ");
+  const partial = series.some((one) => one.partial) && "dotted over shading: partial sum, without every member";
+  const caption = [axis, scale === "log" && "logarithmic axis", smoothed && "7-day trailing mean", partial].filter(Boolean).join(", ");
   const plot = lineChart({ days, series, unit, scale, events, height, label: `${title}. Use the left and right arrow keys to read values.` });
   const figure = { title: context ? `${title}, ${context}` : title, series, caption, filename: slug(`${context} ${title}`) };
   const element = card(title, note, series.length > 1 && legend(series), plot, caption && h("p", { class: "caption" }, caption), tableToggle(() => seriesTable(days, series, unit), saveButton(plot, figure)));

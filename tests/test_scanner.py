@@ -163,3 +163,21 @@ def test_database_from_before_tls_and_quic_were_read_gets_them_from_the_stored_f
     assert data["derived"]["queries"] == [1050] and data["series"]["q_tls_ipv4"] == [50]
     report = upgraded.list_reports(source_id=source["id"], server="", metric="traffic-volume", first="2026-05-02")[1]
     assert (report["day"], report["warnings"]) == ("2026-05-02", ["ignored unknown field 'something-else'"])
+
+
+def test_database_from_before_partial_sums_gets_its_column(store, source):
+    """Version 4 added reports.missing. An older database gets it, and its reports are all kept as reports."""
+    import sqlite3
+
+    from rssac002_dashboard.store import Store
+
+    scan(store, source)
+    old = sqlite3.connect(store.path)
+    old.execute("ALTER TABLE reports DROP COLUMN missing")
+    old.execute("PRAGMA user_version = 3")
+    old.commit()
+    old.close()
+
+    upgraded = Store(store.path)
+    assert len(upgraded.list_reports(source_id=source["id"])) == 16
+    assert upgraded.load_partial(source["id"], "traffic-volume", "2026-05-01", "2026-05-03") == {}

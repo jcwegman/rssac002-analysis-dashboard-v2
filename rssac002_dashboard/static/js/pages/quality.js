@@ -12,7 +12,19 @@ export const quality = {
   load: (context) => (context.source ? api.quality({ source: context.source.id, from: context.first, to: context.last }) : null),
 
   view(context, data) {
-    const { source, first, last } = context;
+    const { source, first, last, meta } = context;
+    const nameOf = (short) => meta.sources.find((one) => one.short_service === short)?.name || short;
+    // Per run of days: the services without a report, each with its metrics when it lacks only some.
+    const without = (metrics) => {
+      const members = [...new Set(Object.values(metrics).flat())];
+      return members
+        .map((member) => {
+          const lacking = Object.keys(metrics).filter((metric) => metrics[metric].includes(member));
+          return lacking.length === 3 ? nameOf(member) : `${nameOf(member)} (${lacking.join(" and ")} only)`;
+        })
+        .join("; ");
+    };
+    const days = (run) => Math.round((new Date(run.last) - new Date(run.first)) / 86400000) + 1;
     const failing = data.checks.filter((check) => check.days_failing);
     const figure = (label, value, foot) => h("div", { class: "figure" }, h("div", { class: "figure-label" }, label), h("div", { class: "figure-value" }, value), h("div", { class: "figure-change" }, foot));
 
@@ -48,6 +60,13 @@ export const quality = {
           ? h("table", { class: "data left wrap" }, h("thead", {}, h("tr", {}, ["Metric", "Days missing", "Which"].map((name) => h("th", { scope: "col" }, name)))), h("tbody", {}, gaps.map(([metric, found]) => h("tr", {}, h("th", { scope: "row" }, metric), h("td", {}, String(found.count)), h("td", {}, dayList(found.days, found.count))))))
           : h("p", { class: "empty" }, "No day is missing in this period."),
       ),
+      data.partial.days
+        ? card(
+            "Days without every service",
+            "This service is the total of several services. On these days some of them had no report, so there is no total: the charts show the sum of the others as a dotted line, and no figure or check uses it. A day on which fewer than three quarters of the services reported is not shown at all.",
+            h("table", { class: "data left wrap" }, h("thead", {}, h("tr", {}, ["Days", "Number", "Without a report"].map((name) => h("th", { scope: "col" }, name)))), h("tbody", {}, data.partial.runs.map((run) => h("tr", {}, h("th", { scope: "row" }, run.first === run.last ? formatDay(run.first, true) : formatRange(run.first, run.last)), h("td", {}, String(days(run))), h("td", {}, without(run.metrics)))))),
+          )
+        : null,
       card(
         "Consistency checks",
         source.servers.length ? null : "This source has no per-nameserver reports, so the checks that add up nameservers are left out.",

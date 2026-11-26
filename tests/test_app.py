@@ -326,3 +326,51 @@ def test_sources_of_a_known_publisher_link_to_the_operators_own_rssac002_page(cl
     assert sorted(page for page in pages.values() if page.startswith("https://rssac002.sidnlabs.nl")) == [
         "https://rssac002.sidnlabs.nl/"
     ]  # the fixture's own .nl folder is not SIDN's repository, so only the importer's .nl links there
+
+
+def test_partial_sums_of_a_total_are_drawn_but_not_published(tmp_path):
+    """A day without every member: its partial sum is in the series, apart, and in no file listing or download."""
+    import datetime as dt
+
+    from .conftest import BODIES, write_report
+
+    days = [dt.date(2026, 5, 1), dt.date(2026, 5, 2)]
+    with make_client(tmp_path) as client:
+        store = client.app.state.store
+        for short in ("aa", "bb", "cc", "dd"):
+            for day in days:
+                for metric in BODIES:
+                    if (short, day) != ("dd", days[1]):
+                        write_report(tmp_path / short, short, day, metric)
+            source_id = store.add_source(
+                name=f"{short}.example", short_service=short, operator="", country="", kind="dir",
+                location=str(tmp_path / short),
+            )  # fmt: skip
+            run_scan(store, store.get_source(source_id), "new", store.create_scan(source_id, "new"))
+        total = store.add_source(
+            name="all", short_service="all", operator="", country="", kind="aggregate", location="aggregate:aa,bb,cc,dd"
+        )
+        run_scan(store, store.get_source(total), "new", store.create_scan(total, "new"))
+
+        params = {"source": total, "from": "2026-05-01", "to": "2026-05-02"}
+        series = client.get("/api/series", params=params).json()
+        assert series["derived"]["queries"] == [4000, None]
+        assert series["partial"]["derived"]["queries"] == [None, 3000]
+        assert series["partial"]["missing"]["rcode-volume"] == [None, ["dd"]]
+        compared = client.get("/api/series", params={**params, "parts": "derived"}).json()
+        assert compared["partial"]["derived"]["nxdomain_share"] == [None, 0.15]
+        assert client.get("/api/sizes", params=params).json()["histograms"]["udp-request-sizes"]["rows"][1] is None
+
+        assert {row["day"] for row in client.get("/api/reports", params={"source": total}).json()["reports"]} == {
+            "2026-05-01"
+        }
+        listing = client.get("/rssac002/2026/05/traffic-volume/").text
+        assert "all-20260501-traffic-volume.yaml" in listing and "all-20260502" not in listing
+        assert client.get("/rssac002/2026/05/traffic-volume/all-20260502-traffic-volume.yaml").status_code == 404
+        with zipfile.ZipFile(io.BytesIO(client.get("/api/archive", params={"source": total}).content)) as archive:
+            assert not [name for name in archive.namelist() if "20260502" in name]
+        coverage = client.get("/api/coverage", params={"source": total}).json()
+        assert (coverage["first"], coverage["last"]) == ("2026-05-01", "2026-05-01")
+        with store.connect() as conn:
+            partial_id = conn.execute("SELECT id FROM reports WHERE missing != ''").fetchone()[0]
+        assert client.get(f"/api/reports/{partial_id}").status_code == 404
